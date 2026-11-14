@@ -45,6 +45,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 npm --prefix web run lint && npm --prefix web run check && npm --prefix web test
+./scripts/check-no-comments.sh
 cargo run -p discombobulator-server -- serve
 cargo run -p discombobulator-server --release -- bench <folder>
 ```

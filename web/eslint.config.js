@@ -4,6 +4,19 @@ import globals from "globals";
 import ts from "typescript-eslint";
 import svelteConfig from "./svelte.config.js";
 
+const noComments = {
+  meta: { type: "suggestion", messages: { comment: "Comments are not allowed in code." } },
+  create(context) {
+    return {
+      Program() {
+        for (const comment of context.sourceCode.getAllComments()) {
+          context.report({ loc: comment.loc, messageId: "comment" });
+        }
+      },
+    };
+  },
+};
+
 export default ts.config(
   { ignores: ["dist/", "node_modules/"] },
   js.configs.recommended,
@@ -26,8 +39,9 @@ export default ts.config(
     },
   },
   {
+    plugins: { local: { rules: { "no-comments": noComments } } },
     rules: {
-      "no-warning-comments": "error",
+      "local/no-comments": "error",
       "svelte/no-at-html-tags": "error",
     },
   },
