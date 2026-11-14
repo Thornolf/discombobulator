@@ -3,3 +3,5 @@ node_modules/
 web/dist/
 *.log
 .DS_Store
+crates/desktop/gen/
+__pycache__/
