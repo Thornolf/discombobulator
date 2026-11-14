@@ -1,4 +1,12 @@
-import type { ApplyPlan, ApplyReport, DecisionChange, FolderListing, Photo, ServerState } from "./types";
+import type {
+  ApplyPlan,
+  ApplyReport,
+  DecisionChange,
+  DuplicateGroup,
+  FolderListing,
+  Photo,
+  ServerState,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -32,6 +40,7 @@ export const api = {
   open: (path: string) =>
     request<ServerState>("/api/library", { method: "POST", body: JSON.stringify({ path }) }),
   photos: () => request<Photo[]>("/api/photos"),
+  duplicates: (tolerance: number) => request<DuplicateGroup[]>(`/api/duplicates?tolerance=${tolerance}`),
   applyPlan: () => request<ApplyPlan>("/api/apply"),
   apply: () => request<ApplyReport>("/api/apply", { method: "POST" }),
   decide: (changes: DecisionChange[]) =>

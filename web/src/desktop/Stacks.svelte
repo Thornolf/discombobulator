@@ -10,6 +10,7 @@
   import type { LibraryStore } from "../lib/library.svelte";
   import { warmUp } from "../lib/preload";
   import type { Photo } from "../lib/types";
+  import Duplicates from "./Duplicates.svelte";
   import Frame from "./Frame.svelte";
   import SceneList from "./SceneList.svelte";
   import Strip from "./Strip.svelte";
@@ -23,7 +24,7 @@
   let solo = $state(false);
   const selected = new SvelteSet<string>();
   let keymap = $state<Keymap>(loadKeymap());
-  let dialog = $state<"open" | "help" | "apply" | null>(null);
+  let dialog = $state<"open" | "help" | "apply" | "duplicates" | null>(null);
   let toast = $state<string | null>(null);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   let anchorId: string | null = null;
@@ -243,7 +244,7 @@
     keep: () => {
       if (stack.length > 1) keepSelected();
     },
-    duplicates: () => notify("Duplicates arrive with M4"),
+    duplicates: () => (dialog = "duplicates"),
     open: () => (dialog = "open"),
     help: () => (dialog = "help"),
   };
@@ -291,6 +292,9 @@
       >
     {/if}
     <button onclick={nextUndecided}>Next undecided <kbd>N</kbd></button>
+    <button onclick={() => (dialog = "duplicates")} disabled={!store.server?.root}
+      >Duplicates <kbd>D</kbd></button
+    >
     <button onclick={() => (dialog = "apply")} disabled={!store.server?.root}>Apply <kbd>E</kbd></button>
     <button onclick={() => (dialog = "help")} aria-label="Keyboard shortcuts">?</button>
   </header>
@@ -378,6 +382,16 @@
       anchorId = null;
       await store.open(path);
       goTo(0, 0);
+    }}
+    onclose={() => (dialog = null)}
+  />
+{:else if dialog === "duplicates"}
+  <Duplicates
+    {store}
+    onopen={(id) => {
+      dialog = null;
+      anchorId = id;
+      locate(id);
     }}
     onclose={() => (dialog = null)}
   />

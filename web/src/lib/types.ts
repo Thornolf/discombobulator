@@ -68,3 +68,8 @@ export interface ApplyReport {
   files_moved: number;
   failures: { name: string; error: string }[];
 }
+
+export interface DuplicateGroup {
+  kind: "exact" | "similar";
+  ids: string[];
+}
