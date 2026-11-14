@@ -2,6 +2,7 @@ import type {
   ApplyPlan,
   ApplyReport,
   DecisionChange,
+  DecisionChanges,
   DuplicateGroup,
   FolderListing,
   PhoneStatus,
@@ -51,6 +52,7 @@ export const api = {
     request<RecycleReport>("/api/recycle", { method: "POST", body: JSON.stringify(confirmed) }),
   applyPlan: () => request<ApplyPlan>("/api/apply"),
   apply: () => request<ApplyReport>("/api/apply", { method: "POST" }),
+  decisionsSince: (since: number) => request<DecisionChanges>(`/api/decisions?since=${since}`),
   decide: (changes: DecisionChange[]) =>
     request<{ applied: number; missing: string[] }>("/api/decisions", {
       method: "POST",

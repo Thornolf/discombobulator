@@ -81,7 +81,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/photos", get(api::photos))
         .route("/api/photos/{id}/thumb", get(api::thumb))
         .route("/api/photos/{id}/preview", get(api::preview))
-        .route("/api/decisions", post(api::decisions))
+        .route(
+            "/api/decisions",
+            get(api::decisions_since).post(api::decisions),
+        )
         .route("/api/apply", get(api::apply_plan).post(api::apply))
         .route("/api/duplicates", get(api::duplicates))
         .route("/api/recycle", get(api::recycle_plan).post(api::recycle))

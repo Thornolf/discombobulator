@@ -63,6 +63,7 @@ pub struct StateDto {
     progress: Option<ProgressSnapshot>,
     unreadable: usize,
     can_open_folders: bool,
+    decisions_seq: i64,
 }
 
 pub const PHONE_CANNOT_OPEN: &str =
@@ -82,6 +83,7 @@ pub async fn state(
     let current = state.session.read().map_err(ApiError::internal)?.clone();
     Ok(Json(StateDto {
         can_open_folders: !crate::guard::came_through_tailnet(&headers),
+        decisions_seq: state.store.decisions_seq(),
         root: current
             .as_ref()
             .map(|session| session.library.root().to_string_lossy().into_owned()),
@@ -329,6 +331,46 @@ pub async fn decisions(
         .await
         .map_err(ApiError::internal)?
         .map(Json)
+}
+
+#[derive(Deserialize)]
+pub struct SinceQuery {
+    since: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct DecisionChangeDto {
+    id: String,
+    decision: Decision,
+}
+
+#[derive(Serialize)]
+pub struct DecisionChangesDto {
+    seq: i64,
+    changes: Vec<DecisionChangeDto>,
+}
+
+pub async fn decisions_since(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SinceQuery>,
+) -> ApiResult<Json<DecisionChangesDto>> {
+    let since = query.since.unwrap_or(0).max(0);
+    tokio::task::spawn_blocking(move || {
+        let found = state
+            .store
+            .decisions_since(since)
+            .map_err(ApiError::internal)?;
+        Ok(Json(DecisionChangesDto {
+            seq: found.seq,
+            changes: found
+                .changes
+                .into_iter()
+                .map(|(id, decision)| DecisionChangeDto { id, decision })
+                .collect(),
+        }))
+    })
+    .await
+    .map_err(ApiError::internal)?
 }
 
 pub async fn apply_plan(

@@ -90,6 +90,7 @@ export class LibraryStore {
   #photosRoot: string | null = null;
   #pending = loadPending(this.#lastRoot);
   #version = -1;
+  #seq = -1;
   #flushing: Promise<void> | null = null;
   #edits = 0;
   #editedAt = new Map<string, number>();
@@ -144,7 +145,13 @@ export class LibraryStore {
       this.online = true;
       if (server.version !== this.#version) {
         this.#version = server.version;
+        this.#seq = server.decisions_seq;
         await this.refresh();
+      } else if (server.decisions_seq < this.#seq) {
+        this.#seq = server.decisions_seq;
+        await this.refresh();
+      } else if (server.decisions_seq !== this.#seq) {
+        await this.pullDecisions();
       }
       await this.flush();
     } catch (error) {
@@ -185,6 +192,22 @@ export class LibraryStore {
     }
   }
 
+  async pullDecisions(): Promise<void> {
+    const since = Math.max(0, this.#seq);
+    const root = this.#photosRoot ?? this.#root;
+    const result = await api.decisionsSince(since);
+    for (const change of result.changes) {
+      const photo = this.#byId.get(change.id);
+      if (!photo || this.#pending.has(pendingId(root, change.id))) {
+        continue;
+      }
+      if (!sameDecision(photo.decision, change.decision)) {
+        photo.decision = change.decision;
+      }
+    }
+    this.#seq = result.seq;
+  }
+
   setPhotos(photos: Photo[], root: string | null = this.#root): void {
     this.#photosRoot = root;
     this.photos = photos;
@@ -197,6 +220,7 @@ export class LibraryStore {
     this.server = await api.open(path);
     this.#adopt(this.server.root);
     this.#version = this.server.version;
+    this.#seq = this.server.decisions_seq;
     this.#undo = [];
     await this.refresh();
   }

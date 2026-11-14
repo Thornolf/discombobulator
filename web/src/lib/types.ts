@@ -37,6 +37,12 @@ export interface ServerState {
   processing: boolean;
   progress: Progress | null;
   can_open_folders: boolean;
+  decisions_seq: number;
+}
+
+export interface DecisionChanges {
+  seq: number;
+  changes: DecisionChange[];
 }
 
 export interface FolderEntry {

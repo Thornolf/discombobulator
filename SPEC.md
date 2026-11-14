@@ -72,6 +72,10 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
   Favorite and rating do not.
 - Undo reverts the last change, including every frame changed by one Keep.
 - LrC 13.2+ reads pick flags from XMP.
+- Every decision write gets an increasing sequence number. `/api/state` reports the latest one as
+  `decisions_seq` and `GET /api/decisions?since=N` lists the decisions written after `N`, so marks made
+  on one client (desktop or phone) appear on the others at their next poll, without a rescan. A
+  client keeps its own not-yet-synced marks over remote ones.
 
 ### XMP sidecars
 

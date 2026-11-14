@@ -124,6 +124,55 @@ async fn decisions_are_saved_and_unknown_ids_reported() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn decision_changes_are_listed_by_sequence() -> TestResult {
+    let fixture = fixture()?;
+    let photos = open_and_wait(&fixture).await?;
+    let first = photos[0]["id"].as_str().unwrap_or_default().to_owned();
+    let second = photos[1]["id"].as_str().unwrap_or_default().to_owned();
+    let (_, state) = send(&fixture.state, request("GET", "/api/state", None)?).await?;
+    let start = state["decisions_seq"].as_i64().unwrap_or(-1);
+    assert_eq!(start, 0);
+    let body = json!({ "changes": [
+        { "id": first, "decision": { "mark": "approved", "favorite": false, "rating": 0 } },
+        { "id": second, "decision": { "mark": "delete", "favorite": false, "rating": 2 } }
+    ]});
+    send(
+        &fixture.state,
+        request("POST", "/api/decisions", Some(body))?,
+    )
+    .await?;
+    let (_, state) = send(&fixture.state, request("GET", "/api/state", None)?).await?;
+    assert_eq!(state["decisions_seq"], json!(2));
+    let (status, all) = send(
+        &fixture.state,
+        request("GET", "/api/decisions?since=0", None)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(all["seq"], json!(2));
+    assert_eq!(all["changes"].as_array().map(Vec::len), Some(2));
+    let body = json!({ "changes": [
+        { "id": first, "decision": { "mark": null, "favorite": true, "rating": 0 } }
+    ]});
+    send(
+        &fixture.state,
+        request("POST", "/api/decisions", Some(body))?,
+    )
+    .await?;
+    let (_, later) = send(
+        &fixture.state,
+        request("GET", "/api/decisions?since=2", None)?,
+    )
+    .await?;
+    assert_eq!(later["seq"], json!(3));
+    assert_eq!(
+        later["changes"],
+        json!([{ "id": first, "decision": { "mark": null, "favorite": true, "rating": 0 } }])
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn rejects_bad_rating_and_bad_ids() -> TestResult {
     let fixture = fixture()?;
     let photos = open_and_wait(&fixture).await?;
