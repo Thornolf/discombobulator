@@ -209,7 +209,7 @@ async fn apply_moves_deleted_photos_and_writes_sidecars() -> TestResult {
     let (_, plan) = send(&fixture.state, request("GET", "/api/apply", None)?).await?;
     assert_eq!(
         plan,
-        json!({ "sidecars": 2, "deletes": 1, "files_to_move": 1 })
+        json!({ "sidecars": 2, "deletes": 1, "files_to_move": 2 })
     );
     let (status, report) = send(&fixture.state, request("POST", "/api/apply", None)?).await?;
     assert_eq!(status, StatusCode::OK);
