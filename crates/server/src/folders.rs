@@ -44,6 +44,12 @@ pub fn roots() -> Vec<Entry> {
 }
 
 pub fn list(path: &Path) -> std::io::Result<Listing> {
+    if !discombobulator_core::fsx::is_local_path(path) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "only folders on this computer can be browsed",
+        ));
+    }
     let canonical = dunce::canonicalize(path)?;
     let mut entries: Vec<Entry> = std::fs::read_dir(&canonical)?
         .filter_map(Result::ok)
@@ -81,6 +87,12 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["A".to_owned(), "b".to_owned()]);
         Ok(())
+    }
+
+    #[test]
+    fn network_and_relative_paths_are_refused() {
+        assert!(list(Path::new(r"\\attacker.example\share")).is_err());
+        assert!(list(Path::new("relative")).is_err());
     }
 
     #[test]

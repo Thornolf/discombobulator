@@ -167,6 +167,9 @@ fn photo_from_source(source: &Source) -> Photo {
 }
 
 pub fn canonical_folder(path: &Path) -> Result<PathBuf, LibraryError> {
+    if !fsx::is_local_path(path) {
+        return Err(LibraryError::NotAFolder(path.to_path_buf()));
+    }
     let canonical =
         dunce::canonicalize(path).map_err(|_| LibraryError::NotAFolder(path.to_path_buf()))?;
     if !canonical.is_dir() {

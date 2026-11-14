@@ -163,6 +163,12 @@ async fn cross_site_writes_and_foreign_hosts_are_refused() -> TestResult {
         .body(Body::empty())?;
     let (status, _) = send(&fixture.state, foreign).await?;
     assert_eq!(status, StatusCode::MISDIRECTED_REQUEST);
+    let cross_site_get = Request::builder()
+        .uri("/api/folders?path=%5C%5Cattacker.example%5Cshare")
+        .header("host", "127.0.0.1:47820")
+        .body(Body::empty())?;
+    let (status, _) = send(&fixture.state, cross_site_get).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
     Ok(())
 }
 

@@ -47,6 +47,23 @@ pub fn read_limited(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+pub fn is_local_path(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        match path.components().next() {
+            Some(Component::Prefix(prefix)) => {
+                matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+            }
+            _ => false,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        path.is_absolute()
+    }
+}
+
 pub fn create_private_dir(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -73,6 +90,20 @@ mod tests {
         std::fs::write(&path, b"abcdef")?;
         assert_eq!(read_limited(&path, 3)?, b"abc");
         Ok(())
+    }
+
+    #[test]
+    fn only_absolute_local_paths_are_local() {
+        assert!(!is_local_path(Path::new("relative/folder")));
+        assert!(!is_local_path(Path::new(r"\\attacker.example\share")));
+        #[cfg(windows)]
+        {
+            assert!(is_local_path(Path::new(r"C:\Photos")));
+            assert!(!is_local_path(Path::new(r"\\?\UNC\host\share")));
+            assert!(!is_local_path(Path::new(r"\\.\pipe\x")));
+        }
+        #[cfg(not(windows))]
+        assert!(is_local_path(Path::new("/photos")));
     }
 
     #[test]
