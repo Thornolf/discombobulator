@@ -248,3 +248,15 @@ async fn reports_exact_duplicates() -> TestResult {
     assert_eq!(groups[0]["ids"].as_array().map(Vec::len), Some(2));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plans_emptying_the_trash_folder() -> TestResult {
+    let fixture = fixture()?;
+    open_and_wait(&fixture).await?;
+    std::fs::create_dir_all(fixture.photos.join("_to_delete"))?;
+    std::fs::write(fixture.photos.join("_to_delete").join("OLD.JPG"), b"1234")?;
+    let (status, plan) = send(&fixture.state, request("GET", "/api/recycle", None)?).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(plan, json!({ "files": 1, "bytes": 4 }));
+    Ok(())
+}

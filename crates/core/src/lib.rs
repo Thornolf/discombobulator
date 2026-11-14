@@ -6,6 +6,7 @@ pub mod library;
 pub mod metadata;
 pub mod model;
 pub mod raf;
+pub mod recycle;
 pub mod scan;
 pub mod sidecar;
 pub mod store;

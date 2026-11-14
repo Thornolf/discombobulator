@@ -81,3 +81,14 @@ export interface PhoneStatus {
   error: string | null;
   action_url: string | null;
 }
+
+export interface RecyclePlan {
+  files: number;
+  bytes: number;
+}
+
+export interface RecycleReport {
+  recycled: number;
+  bytes: number;
+  failures: { name: string; error: string }[];
+}

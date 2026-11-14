@@ -406,3 +406,31 @@ pub async fn phone_enable(
     .map(Json)
     .map_err(ApiError::internal)
 }
+
+pub async fn recycle_plan(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<discombobulator_core::recycle::RecyclePlan>> {
+    let session = session(&state)?;
+    tokio::task::spawn_blocking(move || discombobulator_core::recycle::plan(session.library.root()))
+        .await
+        .map(Json)
+        .map_err(ApiError::internal)
+}
+
+pub async fn recycle(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<discombobulator_core::recycle::RecycleReport>> {
+    let session = session(&state)?;
+    tokio::task::spawn_blocking(move || {
+        let _guard = state
+            .apply_lock
+            .lock()
+            .map_err(|_| ApiError::internal("apply lock poisoned"))?;
+        Ok(discombobulator_core::recycle::recycle(
+            session.library.root(),
+        ))
+    })
+    .await
+    .map_err(ApiError::internal)?
+    .map(Json)
+}

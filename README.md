@@ -45,6 +45,8 @@ Tailscale.
 3. **Apply** writes the XMP sidecars and moves Delete photos to `_to_delete`. In Lightroom Classic,
    import the folder (or use **Metadata → Read Metadata from Files**) to get the picks, rejects, stars and
    labels (Unsure = Yellow, Favorite = Purple).
+4. Once you have checked `_to_delete`, **Empty into Recycle Bin…** in the Apply dialog sends those files to
+   the Windows Recycle Bin, where they can still be restored.
 
 ## Phone
 
