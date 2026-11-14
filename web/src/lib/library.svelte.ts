@@ -37,7 +37,7 @@ export class LibraryStore {
   #undo: UndoEntry[] = [];
   #pending = loadPending();
   #version = -1;
-  #flushing = false;
+  #flushing: Promise<void> | null = null;
   #edits = 0;
   #editedAt = new Map<string, number>();
   #timer: ReturnType<typeof setTimeout> | null = null;
@@ -85,6 +85,7 @@ export class LibraryStore {
     }
     this.loading = true;
     const startedAt = this.#edits;
+    const unsynced = new Set(this.#pending.keys());
     try {
       const photos = await api.photos();
       for (const photo of photos) {
@@ -92,7 +93,7 @@ export class LibraryStore {
         const local = this.#byId.get(photo.id);
         if (pending) {
           photo.decision = pending;
-        } else if (local && (this.#editedAt.get(photo.id) ?? -1) >= startedAt) {
+        } else if (local && (unsynced.has(photo.id) || (this.#editedAt.get(photo.id) ?? -1) >= startedAt)) {
           photo.decision = { ...local.decision };
         }
       }
@@ -109,6 +110,7 @@ export class LibraryStore {
   }
 
   async open(path: string): Promise<void> {
+    await this.#flushing;
     await this.flush();
     this.server = await api.open(path);
     this.#version = this.server.version;
@@ -160,32 +162,37 @@ export class LibraryStore {
 
   async flush(): Promise<void> {
     if (this.#flushing) {
-      return;
+      return this.#flushing;
     }
     const snapshot = new Map(this.#pending);
     const changes = [...snapshot].map(([id, decision]) => ({ id, decision }));
     if (!changes.length) {
       return;
     }
-    this.#flushing = true;
     let again = false;
-    try {
-      const result = await api.decide(changes);
-      for (const id of result.missing) {
-        this.#pending.delete(id);
-      }
-      this.#settle(snapshot);
-      this.online = true;
-      again = this.#pending.size > 0;
-    } catch (error) {
-      if (error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 409) {
+    const run = (async () => {
+      try {
+        const result = await api.decide(changes);
+        for (const id of result.missing) {
+          this.#pending.delete(id);
+        }
         this.#settle(snapshot);
-        this.error = `Some marks were rejected: ${error.message}`;
-      } else {
-        this.online = false;
+        this.online = true;
+        again = this.#pending.size > 0;
+      } catch (error) {
+        if (error instanceof ApiError && (error.status === 400 || error.status === 422)) {
+          this.#settle(snapshot);
+          this.error = `Some marks were rejected: ${error.message}`;
+        } else {
+          this.online = false;
+        }
       }
+    })();
+    this.#flushing = run;
+    try {
+      await run;
     } finally {
-      this.#flushing = false;
+      this.#flushing = null;
     }
     if (again) {
       await this.flush();
