@@ -270,12 +270,8 @@ impl Library {
 
     pub fn photos(&self) -> Result<Vec<Photo>, LibraryError> {
         let mut photos = self.store.photos_under(&self.root)?;
-        photos.sort_by(|a, b| {
-            a.time_ms()
-                .cmp(&b.time_ms())
-                .then_with(|| a.dir.cmp(&b.dir))
-                .then_with(|| a.stem.cmp(&b.stem))
-        });
+        photos.sort_by(|a, b| a.dir.cmp(&b.dir).then_with(|| a.stem.cmp(&b.stem)));
+        photos.sort_by_cached_key(Photo::time_ms);
         Ok(photos)
     }
 

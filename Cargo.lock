@@ -1033,6 +1033,7 @@ dependencies = [
  "dunce",
  "fast_image_resize",
  "image",
+ "jiff",
  "jpeg-decoder",
  "kamadak-exif",
  "libc",
