@@ -1,3 +1,4 @@
+pub mod apply;
 pub mod fsx;
 pub mod imaging;
 pub mod library;
@@ -5,6 +6,7 @@ pub mod metadata;
 pub mod model;
 pub mod raf;
 pub mod scan;
+pub mod sidecar;
 pub mod store;
 pub mod xmp;
 

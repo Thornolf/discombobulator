@@ -1036,6 +1036,7 @@ dependencies = [
  "jpeg-decoder",
  "kamadak-exif",
  "libc",
+ "quick-xml",
  "rayon",
  "rusqlite",
  "serde",

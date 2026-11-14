@@ -1,5 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from "svelte/reactivity";
+  import ApplyDialog from "../components/ApplyDialog.svelte";
   import FolderPicker from "../components/FolderPicker.svelte";
   import Help from "../components/Help.svelte";
   import { previewUrl } from "../lib/api";
@@ -22,7 +23,7 @@
   let solo = $state(false);
   const selected = new SvelteSet<string>();
   let keymap = $state<Keymap>(loadKeymap());
-  let dialog = $state<"open" | "help" | null>(null);
+  let dialog = $state<"open" | "help" | "apply" | null>(null);
   let toast = $state<string | null>(null);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   let anchorId: string | null = null;
@@ -237,7 +238,7 @@
     solo: () => (solo = !solo),
     back: () => (solo = false),
     nextUndecided,
-    apply: () => notify("Apply arrives with M3"),
+    apply: () => (dialog = "apply"),
     select: toggleSelect,
     keep: () => {
       if (stack.length > 1) keepSelected();
@@ -290,6 +291,7 @@
       >
     {/if}
     <button onclick={nextUndecided}>Next undecided <kbd>N</kbd></button>
+    <button onclick={() => (dialog = "apply")} disabled={!store.server?.root}>Apply <kbd>E</kbd></button>
     <button onclick={() => (dialog = "help")} aria-label="Keyboard shortcuts">?</button>
   </header>
   {#if progress?.running}
@@ -376,6 +378,14 @@
       anchorId = null;
       await store.open(path);
       goTo(0, 0);
+    }}
+    onclose={() => (dialog = null)}
+  />
+{:else if dialog === "apply"}
+  <ApplyDialog
+    pending={store.pendingCount}
+    onapplied={async () => {
+      await store.refresh();
     }}
     onclose={() => (dialog = null)}
   />

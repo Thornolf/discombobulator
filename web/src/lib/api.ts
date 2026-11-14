@@ -1,4 +1,4 @@
-import type { DecisionChange, FolderListing, Photo, ServerState } from "./types";
+import type { ApplyPlan, ApplyReport, DecisionChange, FolderListing, Photo, ServerState } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -32,6 +32,8 @@ export const api = {
   open: (path: string) =>
     request<ServerState>("/api/library", { method: "POST", body: JSON.stringify({ path }) }),
   photos: () => request<Photo[]>("/api/photos"),
+  applyPlan: () => request<ApplyPlan>("/api/apply"),
+  apply: () => request<ApplyReport>("/api/apply", { method: "POST" }),
   decide: (changes: DecisionChange[]) =>
     request<{ applied: number; missing: string[] }>("/api/decisions", {
       method: "POST",

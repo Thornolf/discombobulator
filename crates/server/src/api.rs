@@ -305,3 +305,32 @@ pub async fn decisions(
         .map_err(ApiError::internal)?
         .map(Json)
 }
+
+pub async fn apply_plan(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<discombobulator_core::apply::Plan>> {
+    let session = session(&state)?;
+    tokio::task::spawn_blocking(move || discombobulator_core::apply::plan(&session.library))
+        .await
+        .map_err(ApiError::internal)?
+        .map(Json)
+        .map_err(ApiError::internal)
+}
+
+pub async fn apply(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<discombobulator_core::apply::Report>> {
+    let session = session(&state)?;
+    let version = Arc::clone(&state.version);
+    let report = tokio::task::spawn_blocking(move || {
+        let _guard = state
+            .apply_lock
+            .lock()
+            .map_err(|_| ApiError::internal("apply lock poisoned"))?;
+        discombobulator_core::apply::apply(&session.library).map_err(ApiError::internal)
+    })
+    .await
+    .map_err(ApiError::internal)??;
+    version.fetch_add(1, Ordering::Relaxed);
+    Ok(Json(report))
+}

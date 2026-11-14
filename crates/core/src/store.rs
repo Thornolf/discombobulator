@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sidecars (
+    id TEXT PRIMARY KEY,
+    fields TEXT NOT NULL
+);
 ";
 
 const PHOTO_COLUMNS: &str = "p.id, p.dir, p.stem, p.raf, p.jpg, p.size, p.modified_ms, p.fingerprint,
@@ -264,11 +268,49 @@ impl Store {
         )?;
         Ok(())
     }
+
+    pub fn sidecar_fields(&self, id: &str) -> Result<Vec<String>, StoreError> {
+        let fields: Option<String> = self
+            .lock()?
+            .query_row(
+                "SELECT fields FROM sidecars WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(fields
+            .unwrap_or_default()
+            .split('\n')
+            .filter(|field| !field.is_empty())
+            .map(str::to_owned)
+            .collect())
+    }
+
+    pub fn set_sidecar_fields(&self, id: &str, fields: &[String]) -> Result<(), StoreError> {
+        self.lock()?.execute(
+            "INSERT INTO sidecars (id, fields) VALUES (?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET fields = excluded.fields",
+            params![id, fields.join("\n")],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remembers_sidecar_fields() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        assert!(store.sidecar_fields("a")?.is_empty());
+        let fields = vec!["xmp:Rating".to_owned(), "xmpDM:pick".to_owned()];
+        store.set_sidecar_fields("a", &fields)?;
+        assert_eq!(store.sidecar_fields("a")?, fields);
+        store.set_sidecar_fields("a", &[])?;
+        assert!(store.sidecar_fields("a")?.is_empty());
+        Ok(())
+    }
 
     fn photo(dir: &str, stem: &str) -> Photo {
         let dir = PathBuf::from(dir);
