@@ -79,4 +79,5 @@ export interface PhoneStatus {
   url: string | null;
   qr_svg: string | null;
   error: string | null;
+  action_url: string | null;
 }

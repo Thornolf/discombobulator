@@ -382,11 +382,15 @@ pub async fn duplicates(
 pub async fn phone_status(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<crate::phone::PhoneStatus>> {
-    let port = state.port;
-    tokio::task::spawn_blocking(move || crate::phone::status(port))
-        .await
-        .map(Json)
-        .map_err(ApiError::internal)
+    let worker = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || {
+        let status = crate::phone::status(worker.port);
+        worker.refresh_tailnet_host();
+        status
+    })
+    .await
+    .map(Json)
+    .map_err(ApiError::internal)
 }
 
 pub async fn phone_enable(

@@ -36,7 +36,7 @@
   }
 
   function backToInbox(photo: Photo) {
-    store.decide([{ id: photo.id, decision: { ...photo.decision, mark: null, favorite: false } }]);
+    store.decide([{ id: photo.id, decision: { ...photo.decision, mark: null } }]);
     onback(photo.id);
     selectedId = null;
   }

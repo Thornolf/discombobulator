@@ -134,8 +134,10 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
 - End screen: totals, "Re-check unsure" pass, "Review piles" (grid per pile: Delete, Unsure, Approved,
   Favorites; change a photo or send it back to the inbox), Apply.
 - Offline: "Download for offline" stores the folder's photo list and previews on the phone; marks made
-  offline are queued and synced when the PC is reachable. Home-screen web apps on iOS are exempt from
-  Safari's 7-day storage eviction.
+  offline are queued with the folder they belong to and synced when the PC has that folder open.
+  Home-screen web apps on iOS are exempt from Safari's 7-day storage eviction. "Remove offline copy"
+  frees the space. Only the phone shell installs the service worker; the desktop never caches photos.
+- Sending a photo back to the inbox clears its mark and keeps its favorite.
 
 ## Keyboard layouts
 

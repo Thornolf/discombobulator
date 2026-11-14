@@ -35,24 +35,36 @@ async function cacheFirst(request, cacheName) {
   return response;
 }
 
+async function cachedOrNetwork(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  const cached = await cache.match(request);
+  return cached ?? fetch(request);
+}
+
+function offlineResponse() {
+  return new Response(JSON.stringify({ error: "offline" }), {
+    status: 503,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 async function networkFirst(request, cacheName, fallbackUrl) {
   const cache = await caches.open(cacheName);
+  const key = fallbackUrl ?? request;
+  let response;
   try {
-    const response = await fetch(request);
-    if (response.ok) {
-      await cache.put(fallbackUrl ?? request, response.clone());
-    }
-    return response;
+    response = await fetch(request);
   } catch {
-    const cached = await cache.match(fallbackUrl ?? request);
-    if (cached) {
-      return cached;
-    }
-    return new Response(JSON.stringify({ error: "offline" }), {
-      status: 503,
-      headers: { "content-type": "application/json" },
-    });
+    return (await cache.match(key)) ?? offlineResponse();
   }
+  if (response.ok) {
+    await cache.put(key, response.clone());
+    return response;
+  }
+  if (response.status >= 500) {
+    return (await cache.match(key)) ?? response;
+  }
+  return response;
 }
 
 self.addEventListener("fetch", (event) => {
@@ -62,7 +74,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   if (/^\/api\/photos\/[0-9a-f]{20}\/(thumb|preview)$/.test(url.pathname)) {
-    event.respondWith(cacheFirst(request, PHOTOS));
+    event.respondWith(cachedOrNetwork(request, PHOTOS));
     return;
   }
   if (url.pathname === "/api/photos") {

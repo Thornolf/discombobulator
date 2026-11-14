@@ -5,7 +5,7 @@
   import { sortPhotos } from "../lib/grouping";
   import { hamming } from "../lib/hash";
   import type { LibraryStore } from "../lib/library.svelte";
-  import { cachedCount, downloadForOffline } from "../lib/offline";
+  import { cachedCount, clearOffline, downloadForOffline } from "../lib/offline";
   import { warmUp } from "../lib/preload";
   import type { Decision, Photo } from "../lib/types";
   import Piles from "./Piles.svelte";
@@ -31,6 +31,7 @@
   let toast = $state<string | null>(null);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   let start: { x: number; y: number } | null = null;
+  let advanceTimer: ReturnType<typeof setTimeout> | undefined;
 
   const photos = $derived(sortPhotos(store.photos));
   const current: Photo | undefined = $derived(store.photo(deck[position] ?? ""));
@@ -90,15 +91,20 @@
     history.push(position);
     flying = direction;
     zoom = false;
-    setTimeout(() => {
-      flying = null;
-      dragX = 0;
-      dragY = 0;
-      position += 1;
-    }, 170);
+    advanceTimer = setTimeout(finishAdvance, 170);
+  }
+
+  function finishAdvance() {
+    if (!flying) return;
+    clearTimeout(advanceTimer);
+    flying = null;
+    dragX = 0;
+    dragY = 0;
+    position += 1;
   }
 
   function undo() {
+    finishAdvance();
     const restored = store.undo();
     if (!restored) {
       notify("Nothing to undo");
@@ -120,6 +126,13 @@
     if (!start) return;
     dragX = event.clientX - start.x;
     dragY = event.clientY - start.y;
+  }
+
+  function resetDrag() {
+    start = null;
+    dragging = false;
+    dragX = 0;
+    dragY = 0;
   }
 
   function pointerup() {
@@ -180,6 +193,16 @@
     } finally {
       offline = null;
     }
+  }
+
+  async function removeOffline() {
+    try {
+      await clearOffline();
+      notify("Offline copy removed");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error));
+    }
+    offlineCount = await cachedCount(store.photos);
   }
 
   $effect(() => {
@@ -247,7 +270,7 @@
           onpointerdown={pointerdown}
           onpointermove={pointermove}
           onpointerup={pointerup}
-          onpointercancel={pointerup}
+          onpointercancel={resetDrag}
           ondblclick={() => (zoom = !zoom)}
         >
           <img class="thumb" src={thumbUrl(current)} alt="" />
@@ -328,6 +351,9 @@
     </button>
     {#if offlineCount !== null}
       <p class="note">{offlineCount} of {store.photos.length} previews saved on this phone.</p>
+    {/if}
+    {#if offlineCount}
+      <button onclick={removeOffline} disabled={!!offline}>Remove offline copy</button>
     {/if}
     <p class="note">
       {store.pendingCount

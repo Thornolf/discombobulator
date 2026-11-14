@@ -68,6 +68,11 @@
   {#if status?.error}
     <p class="error">{status.error}</p>
   {/if}
+  {#if status?.action_url}
+    <p>
+      <a href={status.action_url} target="_blank" rel="noopener noreferrer">{status.action_url}</a>
+    </p>
+  {/if}
   {#if error}
     <p class="error">{error}</p>
   {/if}
@@ -93,5 +98,8 @@
   }
   .error {
     color: var(--del);
+  }
+  a {
+    word-break: break-all;
   }
 </style>
