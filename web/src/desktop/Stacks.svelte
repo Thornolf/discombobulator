@@ -15,6 +15,8 @@
   import Frame from "./Frame.svelte";
   import SceneList from "./SceneList.svelte";
   import Strip from "./Strip.svelte";
+  import * as cursorMoves from "./cursor";
+  import type { Cursor } from "./cursor";
   import { clock } from "./progress";
 
   let { store }: { store: LibraryStore } = $props();
@@ -49,18 +51,14 @@
     toastTimer = setTimeout(() => (toast = null), 1_800);
   }
 
+  const cursor: Cursor = $derived({ scene: sceneIndex, stack: stackIndex, frame: frameIndex });
+
   function locate(id: string) {
-    scenes.forEach((candidate, si) =>
-      candidate.stacks.forEach((frames, ki) =>
-        frames.forEach((photo, fi) => {
-          if (photo.id === id) {
-            sceneIndex = si;
-            stackIndex = ki;
-            frameIndex = fi;
-          }
-        }),
-      ),
-    );
+    const found = cursorMoves.locate(scenes, id);
+    if (!found) return;
+    sceneIndex = found.scene;
+    stackIndex = found.stack;
+    frameIndex = found.frame;
   }
 
   $effect(() => {
@@ -81,8 +79,8 @@
   });
 
   $effect(() => {
-    const following = neighbour(1);
-    const preceding = neighbour(-1);
+    const following = cursorMoves.neighbourStack(scenes, cursor, 1);
+    const preceding = cursorMoves.neighbourStack(scenes, cursor, -1);
     for (const photo of [...(following ?? []), ...(preceding ?? [])].slice(0, 7)) {
       warmUp(previewUrl(photo));
     }
@@ -97,18 +95,6 @@
     }
   });
 
-  function neighbour(direction: 1 | -1): Stack | null {
-    let si = sceneIndex;
-    let ki = stackIndex + direction;
-    while (scenes[si] && (ki < 0 || ki >= (scenes[si]?.stacks.length ?? 0))) {
-      si += direction;
-      const next = scenes[si];
-      if (!next) return null;
-      ki = direction > 0 ? 0 : next.stacks.length - 1;
-    }
-    return scenes[si]?.stacks[ki] ?? null;
-  }
-
   function goTo(si: number, ki: number, fi = 0) {
     sceneIndex = si;
     stackIndex = ki;
@@ -117,40 +103,25 @@
     selected.clear();
   }
 
-  function moveStack(direction: 1 | -1, landOnLast = false) {
-    let si = sceneIndex;
-    let ki = stackIndex + direction;
-    const current = scenes[si];
-    if (!current) return;
-    if (ki >= current.stacks.length) {
-      if (si >= scenes.length - 1) {
-        notify("Last stack");
-        return;
-      }
-      si += 1;
-      ki = 0;
-    }
-    if (ki < 0) {
-      if (si === 0) return;
-      si -= 1;
-      ki = (scenes[si]?.stacks.length ?? 1) - 1;
-    }
-    const target = scenes[si]?.stacks[ki] ?? [];
-    goTo(si, ki, landOnLast ? Math.max(0, target.length - 1) : 0);
+  function follow(target: Cursor | null): boolean {
+    if (!target) return false;
+    if (cursorMoves.sameStack(target, cursor)) frameIndex = target.frame;
+    else goTo(target.scene, target.stack, target.frame);
+    return true;
+  }
+
+  function moveStack(direction: 1 | -1) {
+    if (!follow(cursorMoves.moveStack(scenes, cursor, direction)) && direction > 0 && scene)
+      notify("Last stack");
   }
 
   function moveFocus(direction: 1 | -1) {
-    const next = frameIndex + direction;
-    if (stack.length < 2 || next < 0 || next >= stack.length) {
-      moveStack(direction, direction < 0);
-      return;
-    }
-    frameIndex = next;
+    if (!follow(cursorMoves.moveFocus(scenes, cursor, direction)) && direction > 0 && scene)
+      notify("Last stack");
   }
 
   function moveScene(direction: 1 | -1) {
-    const si = sceneIndex + direction;
-    if (scenes[si]) goTo(si, 0);
+    follow(cursorMoves.moveScene(scenes, cursor, direction));
   }
 
   function mark(action: MarkAction) {
@@ -195,16 +166,9 @@
   }
 
   function nextUndecided() {
-    const flat = scenes.flatMap((item, si) => item.stacks.map((frames, ki) => ({ si, ki, frames })));
-    const start = flat.findIndex((entry) => entry.si === sceneIndex && entry.ki === stackIndex);
-    for (let offset = 1; offset <= flat.length; offset += 1) {
-      const entry = flat[(start + offset) % flat.length];
-      if (entry?.frames.some((photo) => !photo.decision.mark)) {
-        goTo(entry.si, entry.ki);
-        return;
-      }
-    }
-    notify("Everything is decided 🎉");
+    const target = cursorMoves.nextUndecided(scenes, cursor);
+    if (target) goTo(target.scene, target.stack);
+    else notify("Everything is decided 🎉");
   }
 
   function undo() {
