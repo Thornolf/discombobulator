@@ -7,14 +7,31 @@ repository.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[lib]
+name = "discombobulator_server"
+
 [[bin]]
 name = "discombobulator"
 path = "src/main.rs"
 
 [dependencies]
+axum = "0.8"
+dunce = "1"
+directories = "6"
 clap = { version = "4", features = ["derive"] }
 discombobulator-core = { path = "../core" }
+mime_guess = "2"
+notify = "8"
+rust-embed = "8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
 
 [lints]
 workspace = true

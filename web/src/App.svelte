@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { appName } from "./lib/app";
+  import { onDestroy, onMount } from "svelte";
+  import Stacks from "./desktop/Stacks.svelte";
+  import { LibraryStore } from "./lib/library.svelte";
+
+  const store = new LibraryStore();
+
+  onMount(() => store.start());
+  onDestroy(() => store.stop());
 </script>
 
-<main>{appName}</main>
+<Stacks {store} />

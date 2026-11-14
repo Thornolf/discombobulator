@@ -1,0 +1,96 @@
+:root {
+  --bg: #f2f1ee;
+  --panel: #ffffff;
+  --line: #dcdad4;
+  --tx: #1d1d1b;
+  --mut: #77756f;
+  --acc: #2f5bd3;
+  --stage: #7a7a78;
+  --del: #e0453c;
+  --uns: #d99a12;
+  --ok: #1f9d57;
+  --fav: #e2a900;
+  --heart: #c2185b;
+  --f-body: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --f-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141517;
+    --panel: #1c1e21;
+    --line: #2e3136;
+    --tx: #e9eaec;
+    --mut: #9095a0;
+    --acc: #8fb0ff;
+    --stage: #3a3b3d;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--tx);
+  font: 13px/1.45 var(--f-body);
+  overflow: hidden;
+}
+
+#app {
+  height: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:hover {
+  border-color: var(--mut);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+}
+
+button.primary {
+  background: var(--tx);
+  color: var(--bg);
+  border-color: var(--tx);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+kbd {
+  font: 500 10.5px var(--f-mono);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 4px;
+  color: var(--mut);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

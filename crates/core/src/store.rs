@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 const PHOTO_COLUMNS: &str = "p.id, p.dir, p.stem, p.raf, p.jpg, p.size, p.modified_ms, p.fingerprint,
     p.processed_fingerprint, p.capture_ms, p.orientation, p.dhash, p.camera_rating, p.width, p.height,
-    p.error, d.mark, d.favorite, d.rating";
+    p.error, d.mark, d.favorite, d.rating, d.id IS NOT NULL";
 
 fn path_text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
@@ -86,6 +86,7 @@ fn photo_from_row(row: &Row<'_>) -> rusqlite::Result<Photo> {
             favorite: favorite.unwrap_or(false),
             rating: rating.unwrap_or(0),
         },
+        has_decision: row.get(19)?,
     })
 }
 
@@ -229,23 +230,18 @@ impl Store {
         decision: Decision,
         now_ms: i64,
     ) -> Result<(), StoreError> {
-        let connection = self.lock()?;
-        if decision.is_empty() {
-            connection.execute("DELETE FROM decisions WHERE id = ?1", params![id])?;
-        } else {
-            connection.execute(
-                "INSERT INTO decisions (id, mark, favorite, rating, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(id) DO UPDATE SET mark = excluded.mark, favorite = excluded.favorite,
-                     rating = excluded.rating, updated_ms = excluded.updated_ms",
-                params![
-                    id,
-                    decision.mark.map(Mark::as_str),
-                    decision.favorite,
-                    decision.rating,
-                    now_ms
-                ],
-            )?;
-        }
+        self.lock()?.execute(
+            "INSERT INTO decisions (id, mark, favorite, rating, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET mark = excluded.mark, favorite = excluded.favorite,
+                 rating = excluded.rating, updated_ms = excluded.updated_ms",
+            params![
+                id,
+                decision.mark.map(Mark::as_str),
+                decision.favorite,
+                decision.rating,
+                now_ms
+            ],
+        )?;
         Ok(())
     }
 
@@ -294,6 +290,7 @@ mod tests {
             height: None,
             error: None,
             decision: Decision::default(),
+            has_decision: false,
         }
     }
 
@@ -351,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn decisions_round_trip_and_empty_decision_is_removed() -> Result<(), StoreError> {
+    fn decisions_round_trip_and_cleared_decision_is_kept() -> Result<(), StoreError> {
         let store = Store::in_memory()?;
         let p = photo("/p", "A");
         store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), &[])?;
@@ -363,10 +360,12 @@ mod tests {
         store.set_decision(&p.id, decision, 1)?;
         assert_eq!(store.photo(&p.id)?.map(|p| p.decision), Some(decision));
         store.set_decision(&p.id, Decision::default(), 2)?;
+        let cleared = store.photo(&p.id)?;
         assert_eq!(
-            store.photo(&p.id)?.map(|p| p.decision),
+            cleared.as_ref().map(|p| p.decision),
             Some(Decision::default())
         );
+        assert_eq!(cleared.map(|p| p.has_decision), Some(true));
         Ok(())
     }
 

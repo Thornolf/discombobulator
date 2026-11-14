@@ -61,9 +61,20 @@ pub struct Photo {
     pub height: Option<u32>,
     pub error: Option<String>,
     pub decision: Decision,
+    pub has_decision: bool,
 }
 
 impl Photo {
+    pub fn effective_decision(&self) -> Decision {
+        if self.has_decision {
+            return self.decision;
+        }
+        Decision {
+            rating: self.camera_rating.unwrap_or(0),
+            ..self.decision
+        }
+    }
+
     pub fn time_ms(&self) -> i64 {
         self.capture_ms.unwrap_or(self.modified_ms)
     }
