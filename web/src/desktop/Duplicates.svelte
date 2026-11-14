@@ -75,13 +75,13 @@
   }
 
   function onkeydown(event: KeyboardEvent) {
-    if (event.target instanceof HTMLInputElement) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
       event.preventDefault();
       event.stopPropagation();
       store.undo();
       return;
     }
+    if (event.target instanceof HTMLInputElement) return;
     const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
     const group = resolved[groupIndex];
     const handled = (() => {
