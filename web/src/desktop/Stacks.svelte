@@ -356,6 +356,7 @@
 {:else if dialog === "duplicates"}
   <Duplicates
     {store}
+    {keymap}
     onopen={(id) => {
       dialog = null;
       anchorId = id;
