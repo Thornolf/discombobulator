@@ -211,11 +211,10 @@ impl Library {
     }
 
     pub fn rescan(&self) -> Result<usize, LibraryError> {
-        let photos: Vec<Photo> = scan::scan(&self.root)
-            .iter()
-            .map(photo_from_source)
-            .collect();
-        self.store.replace_photos(&self.root, &photos)?;
+        let scan = scan::scan(&self.root)?;
+        let photos: Vec<Photo> = scan.sources.iter().map(photo_from_source).collect();
+        self.store
+            .replace_photos(&self.root, &photos, scan.errors == 0)?;
         Ok(photos.len())
     }
 
@@ -266,10 +265,17 @@ impl Library {
             .into_iter()
             .filter(|photo| self.needs_rendering(photo))
             .collect();
+        if self
+            .progress
+            .running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Ok(self.progress.snapshot());
+        }
         self.progress.total.store(pending.len(), Ordering::Relaxed);
         self.progress.done.store(0, Ordering::Relaxed);
         self.progress.failed.store(0, Ordering::Relaxed);
-        self.progress.running.store(true, Ordering::Relaxed);
         let _running = RunningGuard(&self.progress.running);
         self.pool.install(|| {
             pending.par_iter().for_each(|photo| {
@@ -327,7 +333,10 @@ impl Library {
                     .write(&photo.id, Variant::Preview, &rendered.preview)
             });
         if let Err(error) = written {
-            return failed_rendering(photo, info, &error.to_string());
+            return Rendering {
+                camera_rating,
+                ..failed_rendering(photo, info, &error.to_string())
+            };
         }
         Rendering {
             fingerprint: photo.fingerprint.clone(),
@@ -348,11 +357,13 @@ impl Library {
         let Some(photo) = self.photo(id)? else {
             return Ok(None);
         };
-        if photo.is_processed()
-            && photo.error.is_none()
-            && let Ok(bytes) = self.cache.read(id, variant)
-        {
-            return Ok(Some(bytes));
+        if photo.is_processed() {
+            if photo.error.is_some() {
+                return Ok(None);
+            }
+            if let Ok(bytes) = self.cache.read(id, variant) {
+                return Ok(Some(bytes));
+            }
         }
         let rendering = self.render_safely(&photo);
         self.store.save_rendering(id, &rendering)?;
@@ -462,6 +473,25 @@ mod tests {
             Library::open(&dir.path().join("missing"), store, cache),
             Err(LibraryError::NotAFolder(_))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_root_keeps_decisions() -> Result<(), LibraryError> {
+        let (dir, library) = library_with(&[("A.JPG", gradient_jpeg(40, 30, 1))])?;
+        let id = library.photos()?.remove(0).id;
+        let delete = Decision {
+            mark: Some(crate::model::Mark::Delete),
+            favorite: false,
+            rating: 0,
+        };
+        library.store().set_decision(&id, delete, 1)?;
+        let moved = dir.path().join("away");
+        std::fs::rename(library.root(), &moved)?;
+        assert!(library.rescan().is_err());
+        std::fs::rename(&moved, library.root())?;
+        library.rescan()?;
+        assert_eq!(library.photo(&id)?.map(|p| p.decision), Some(delete));
         Ok(())
     }
 

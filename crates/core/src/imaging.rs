@@ -62,6 +62,14 @@ fn fit(width: u32, height: u32, edge: u32) -> (u32, u32) {
     (scaled(width), scaled(height))
 }
 
+fn components(format: PixelFormat) -> u64 {
+    match format {
+        PixelFormat::L8 | PixelFormat::L16 => 1,
+        PixelFormat::RGB24 => 3,
+        PixelFormat::CMYK32 => 4,
+    }
+}
+
 fn check_size(info: &jpeg_decoder::ImageInfo) -> Result<(), ImagingError> {
     let pixels = u64::from(info.width) * u64::from(info.height);
     if pixels == 0 || pixels > MAX_PIXELS {
@@ -70,7 +78,8 @@ fn check_size(info: &jpeg_decoder::ImageInfo) -> Result<(), ImagingError> {
     match info.coding_process {
         jpeg_decoder::CodingProcess::Lossless => Err(ImagingError::Lossless),
         jpeg_decoder::CodingProcess::DctProgressive
-            if pixels.saturating_mul(3 * 2) > MAX_DECODE_BYTES as u64 =>
+            if pixels.saturating_mul(components(info.pixel_format) * 2)
+                > MAX_DECODE_BYTES as u64 =>
         {
             Err(ImagingError::TooLarge)
         }
@@ -92,13 +101,7 @@ fn decode_at_least(jpeg: &[u8], edge: u32) -> Result<RgbImage, ImagingError> {
     let rgb = match info.pixel_format {
         PixelFormat::RGB24 => pixels,
         PixelFormat::L8 => pixels.iter().flat_map(|&v| [v, v, v]).collect(),
-        PixelFormat::L16 => pixels
-            .chunks_exact(2)
-            .flat_map(|pair| {
-                let value = (u16::from_ne_bytes([pair[0], pair[1]]) >> 8) as u8;
-                [value, value, value]
-            })
-            .collect(),
+        PixelFormat::L16 => return Err(ImagingError::PixelFormat),
         PixelFormat::CMYK32 => pixels
             .chunks_exact(4)
             .flat_map(|cmyk| {
@@ -252,6 +255,34 @@ mod tests {
         assert_eq!(first, again);
         assert!(hamming(first, flipped) > 12);
         Ok(())
+    }
+
+    fn header_only_jpeg(marker: u8, width: u16, height: u16) -> Vec<u8> {
+        let mut jpeg: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x43, 0x00];
+        jpeg.extend([1u8; 64]);
+        let [h0, h1] = height.to_be_bytes();
+        let [w0, w1] = width.to_be_bytes();
+        jpeg.extend([
+            0xFF, marker, 0x00, 0x11, 0x08, h0, h1, w0, w1, 0x03, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11,
+            0,
+        ]);
+        jpeg.extend([
+            0xFF, 0xC4, 0x00, 0x14, 0x00, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]);
+        jpeg.extend([0xFF, 0xDA, 0x00, 0x08, 0x01, 1, 0x00, 0, 0, 0, 0xFF, 0xD9]);
+        jpeg
+    }
+
+    #[test]
+    fn progressive_jpeg_over_the_memory_budget_is_rejected() {
+        let jpeg = header_only_jpeg(0xC2, 11_000, 10_000);
+        assert!(matches!(render(&jpeg, 1), Err(ImagingError::TooLarge)));
+    }
+
+    #[test]
+    fn lossless_jpeg_is_rejected() {
+        let jpeg = header_only_jpeg(0xC3, 100, 100);
+        assert!(matches!(render(&jpeg, 1), Err(ImagingError::Lossless)));
     }
 
     #[test]

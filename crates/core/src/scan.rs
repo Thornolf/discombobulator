@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -45,6 +46,10 @@ impl Source {
         self.jpg.as_ref().or(self.raf.as_ref())
     }
 
+    pub fn anchor(&self) -> Option<&FileStamp> {
+        self.raf.as_ref().or(self.jpg.as_ref())
+    }
+
     pub fn fingerprint(&self) -> String {
         let mut hasher = blake3::Hasher::new();
         for file in self.files() {
@@ -56,7 +61,12 @@ impl Source {
     }
 
     pub fn id(&self) -> String {
-        photo_id(&self.dir, &self.stem)
+        let name = self
+            .anchor()
+            .and_then(|file| file.path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.stem.clone());
+        photo_id(&self.dir, &name)
     }
 
     pub fn size(&self) -> u64 {
@@ -68,11 +78,11 @@ impl Source {
     }
 }
 
-pub fn photo_id(dir: &Path, stem: &str) -> String {
+pub fn photo_id(dir: &Path, anchor_name: &str) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(dir.to_string_lossy().as_bytes());
     hasher.update(b"\0");
-    hasher.update(stem.to_lowercase().as_bytes());
+    hasher.update(anchor_name.as_bytes());
     hasher.finalize().to_hex()[..20].to_owned()
 }
 
@@ -80,8 +90,56 @@ fn is_skipped_dir(name: &str) -> bool {
     name.starts_with('.') || name.eq_ignore_ascii_case(TRASH_DIR)
 }
 
-pub fn scan(root: &Path) -> Vec<Source> {
-    let mut sources: BTreeMap<(PathBuf, String), Source> = BTreeMap::new();
+#[derive(Debug, Default)]
+pub struct Scan {
+    pub sources: Vec<Source>,
+    pub errors: usize,
+}
+
+fn stamp(entry: &walkdir::DirEntry) -> Option<FileStamp> {
+    let metadata = entry.metadata().ok()?;
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0);
+    Some(FileStamp {
+        path: entry.path().to_path_buf(),
+        size: metadata.len(),
+        modified_ms,
+    })
+}
+
+fn jpg_rank(file: &FileStamp) -> (bool, PathBuf) {
+    let is_jpeg = file
+        .path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("jpeg"));
+    (is_jpeg, file.path.clone())
+}
+
+fn single(dir: &Path, stem: &str, kind: Kind, file: FileStamp) -> Source {
+    let (raf, jpg) = match kind {
+        Kind::Raf => (Some(file), None),
+        Kind::Jpg => (None, Some(file)),
+    };
+    Source {
+        dir: dir.to_path_buf(),
+        stem: stem.to_owned(),
+        raf,
+        jpg,
+    }
+}
+
+pub fn scan(root: &Path) -> io::Result<Scan> {
+    if !std::fs::metadata(root)?.is_dir() {
+        return Err(io::Error::new(io::ErrorKind::NotADirectory, "not a folder"));
+    }
+    std::fs::read_dir(root)?;
+    type Group = (Vec<FileStamp>, Vec<FileStamp>, String);
+    let mut groups: BTreeMap<(PathBuf, String), Group> = BTreeMap::new();
+    let mut errors = 0;
     let walker = WalkDir::new(root)
         .follow_links(false)
         .sort_by_file_name()
@@ -91,7 +149,11 @@ pub fn scan(root: &Path) -> Vec<Source> {
                 || !entry.file_type().is_dir()
                 || !is_skipped_dir(&entry.file_name().to_string_lossy())
         });
-    for entry in walker.filter_map(Result::ok) {
+    for entry in walker {
+        let Ok(entry) = entry else {
+            errors += 1;
+            continue;
+        };
         if !entry.file_type().is_file() {
             continue;
         }
@@ -100,44 +162,35 @@ pub fn scan(root: &Path) -> Vec<Source> {
         let (Some(dir), Some(stem)) = (path.parent(), path.file_stem()) else {
             continue;
         };
-        let Ok(metadata) = entry.metadata() else {
+        let Some(file) = stamp(&entry) else {
+            errors += 1;
             continue;
         };
-        let modified_ms = metadata
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-            .and_then(|duration| i64::try_from(duration.as_millis()).ok())
-            .unwrap_or(0);
-        let stamp = FileStamp {
-            path: path.to_path_buf(),
-            size: metadata.len(),
-            modified_ms,
-        };
         let stem = stem.to_string_lossy().into_owned();
-        let pair_key = (dir.to_path_buf(), stem.to_lowercase());
-        let occupied = sources.get(&pair_key).is_some_and(|source| match kind {
-            Kind::Raf => source.raf.is_some(),
-            Kind::Jpg => source.jpg.is_some(),
-        });
-        let (key, stem) = if occupied {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            ((dir.to_path_buf(), name.to_lowercase()), name)
-        } else {
-            (pair_key, stem)
-        };
-        let source = sources.entry(key).or_insert_with(|| Source {
-            dir: dir.to_path_buf(),
-            stem,
-            raf: None,
-            jpg: None,
-        });
+        let group = groups
+            .entry((dir.to_path_buf(), stem.to_lowercase()))
+            .or_insert_with(|| (Vec::new(), Vec::new(), stem));
         match kind {
-            Kind::Raf => source.raf = Some(stamp),
-            Kind::Jpg => source.jpg = Some(stamp),
+            Kind::Raf => group.0.push(file),
+            Kind::Jpg => group.1.push(file),
         }
     }
-    sources.into_values().collect()
+    let mut sources = Vec::new();
+    for ((dir, _), (mut rafs, mut jpgs, stem)) in groups {
+        rafs.sort_by(|a, b| a.path.cmp(&b.path));
+        jpgs.sort_by_key(jpg_rank);
+        let mut rafs = rafs.into_iter();
+        let mut jpgs = jpgs.into_iter();
+        sources.push(Source {
+            dir: dir.clone(),
+            stem: stem.clone(),
+            raf: rafs.next(),
+            jpg: jpgs.next(),
+        });
+        sources.extend(rafs.map(|file| single(&dir, &stem, Kind::Raf, file)));
+        sources.extend(jpgs.map(|file| single(&dir, &stem, Kind::Jpg, file)));
+    }
+    Ok(Scan { sources, errors })
 }
 
 #[cfg(test)]
@@ -167,7 +220,7 @@ mod tests {
         ] {
             touch(&root.join(name))?;
         }
-        let sources = scan(root);
+        let sources = scan(root)?.sources;
         let summary: Vec<(String, bool, bool)> = sources
             .iter()
             .map(|s| (s.stem.clone(), s.raf.is_some(), s.jpg.is_some()))
@@ -190,7 +243,7 @@ mod tests {
         touch(&dir.path().join("A.jpg"))?;
         touch(&dir.path().join("A.jpeg"))?;
         touch(&dir.path().join("A.RAF"))?;
-        let sources = scan(dir.path());
+        let sources = scan(dir.path())?.sources;
         assert_eq!(sources.len(), 2);
         assert_eq!(sources.iter().filter(|s| s.raf.is_some()).count(), 1);
         assert_eq!(sources.iter().filter(|s| s.jpg.is_some()).count(), 2);
@@ -202,17 +255,38 @@ mod tests {
         let dir = tempfile::tempdir()?;
         touch(&dir.path().join("A.RAF"))?;
         touch(&dir.path().join("A.JPG"))?;
-        let sources = scan(dir.path());
+        let sources = scan(dir.path())?.sources;
         let display = sources.first().and_then(Source::display_file);
         assert_eq!(display.map(|f| kind_of(&f.path)), Some(Some(Kind::Jpg)));
         Ok(())
     }
 
     #[test]
-    fn id_is_stable_and_case_insensitive_on_stem() {
-        let dir = Path::new("/photos/2026");
-        assert_eq!(photo_id(dir, "DSCF0001"), photo_id(dir, "dscf0001"));
-        assert_ne!(photo_id(dir, "DSCF0001"), photo_id(dir, "DSCF0002"));
+    fn id_follows_the_anchor_file_not_its_siblings() -> std::io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        touch(&dir.path().join("A.RAF"))?;
+        touch(&dir.path().join("A.JPG"))?;
+        let pair = scan(dir.path())?.sources.remove(0).id();
+        touch(&dir.path().join("A.jpeg"))?;
+        let sources = scan(dir.path())?.sources;
+        assert!(
+            sources.iter().any(
+                |s| s.id() == pair && s.jpg.as_ref().is_some_and(|f| f.path.ends_with("A.JPG"))
+            )
+        );
+        let extra = sources.iter().find(|s| s.id() != pair).map(Source::id);
+        std::fs::remove_file(dir.path().join("A.RAF"))?;
+        std::fs::remove_file(dir.path().join("A.JPG"))?;
+        let left = scan(dir.path())?.sources;
+        assert_eq!(left.len(), 1);
+        assert_ne!(left.first().map(Source::id), Some(pair));
+        assert_eq!(left.first().map(Source::id), extra);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_root_is_an_error_not_an_empty_folder() {
+        assert!(scan(Path::new("/definitely/not/here")).is_err());
     }
 
     #[cfg(unix)]
@@ -222,7 +296,7 @@ mod tests {
         touch(&outside.path().join("secret.JPG"))?;
         let dir = tempfile::tempdir()?;
         std::os::unix::fs::symlink(outside.path(), dir.path().join("link"))?;
-        assert!(scan(dir.path()).is_empty());
+        assert!(scan(dir.path())?.sources.is_empty());
         Ok(())
     }
 }

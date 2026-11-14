@@ -1,4 +1,3 @@
-pub const XMP_SCAN_LIMIT: u64 = 4 * 1024 * 1024;
 const PACKET_START: &[u8] = b"<x:xmpmeta";
 const PACKET_END: &[u8] = b"</x:xmpmeta>";
 const MAX_PACKET_LEN: usize = 1024 * 1024;
