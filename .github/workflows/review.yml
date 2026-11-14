@@ -27,7 +27,7 @@ jobs:
         run: |
           echo "::error::Add the CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY secret to run the code-reviewer review."
           exit 1
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -71,7 +71,7 @@ jobs:
         run: |
           echo "::error::Add the CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY secret to run the security-reviewer review."
           exit 1
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
