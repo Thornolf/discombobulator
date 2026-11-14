@@ -14,6 +14,8 @@ pub struct PhoneStatus {
     pub qr_svg: Option<String>,
     pub error: Option<String>,
     pub action_url: Option<String>,
+    #[serde(skip)]
+    pub machine: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -222,6 +224,7 @@ fn status_with(url: Option<String>, failure: Option<Failure>) -> PhoneStatus {
         url,
         error,
         action_url,
+        machine: None,
     }
 }
 
@@ -232,6 +235,7 @@ fn missing() -> PhoneStatus {
         qr_svg: None,
         error: Some("Tailscale is not installed on this PC".into()),
         action_url: None,
+        machine: None,
     }
 }
 
@@ -251,11 +255,13 @@ pub fn status(port: u16) -> PhoneStatus {
     let serving = run(&binary, &["serve", "status", "--json"])
         .map(|json| serves_port(&json, port))
         .unwrap_or(false);
-    match name {
+    let mut status = match &name {
         Some(name) if serving => status_with(Some(format!("https://{name}/")), None),
         Some(_) => status_with(None, None),
         None => status_with(None, Some(Failure::new("Tailscale is not connected"))),
-    }
+    };
+    status.machine = name;
+    status
 }
 
 pub fn enable(port: u16) -> PhoneStatus {

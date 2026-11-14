@@ -96,6 +96,7 @@ describe("LibraryStore", () => {
     expect(store.pendingCount).toBe(1);
     server.unreachable = false;
     store.server = { root: "/q", version: 1, processing: false, progress: null };
+    store.setPhotos(store.photos, "/q");
     store.decide([{ id: "b", decision: { mark: "approved", favorite: false, rating: 0 } }]);
     await store.flush();
     expect(server.decided.flat().map((change) => change.id)).toEqual(["b"]);
@@ -104,5 +105,17 @@ describe("LibraryStore", () => {
     await store.flush();
     expect(server.decided.flat().map((change) => change.id)).toEqual(["b", "a"]);
     expect(store.pendingCount).toBe(0);
+  });
+
+  it("tags marks with the folder of the list on screen during a folder switch", async () => {
+    const store = await loaded();
+    store.server = { root: "/q", version: 2, processing: false, progress: null };
+    server.unreachable = true;
+    store.decide([{ id: "a", decision: { mark: "delete", favorite: false, rating: 0 } }]);
+    await store.flush();
+    server.unreachable = false;
+    await store.flush();
+    expect(server.decided.flat().map((change) => change.id)).toEqual([]);
+    expect(store.pendingCount).toBe(1);
   });
 });

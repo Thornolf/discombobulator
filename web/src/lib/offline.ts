@@ -10,6 +10,15 @@ export function registerServiceWorker(): void {
   }
 }
 
+export function unregisterServiceWorkers(): void {
+  if ("serviceWorker" in navigator) {
+    void navigator.serviceWorker
+      .getRegistrations()
+      .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+      .catch(() => undefined);
+  }
+}
+
 export async function cachedCount(photos: Photo[]): Promise<number> {
   if (!("caches" in window)) {
     return 0;

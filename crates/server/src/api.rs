@@ -385,7 +385,7 @@ pub async fn phone_status(
     let worker = Arc::clone(&state);
     tokio::task::spawn_blocking(move || {
         let status = crate::phone::status(worker.port);
-        worker.refresh_tailnet_host();
+        worker.remember_tailnet_host(status.machine.clone());
         status
     })
     .await
@@ -399,7 +399,7 @@ pub async fn phone_enable(
     let worker = Arc::clone(&state);
     tokio::task::spawn_blocking(move || {
         let status = crate::phone::enable(worker.port);
-        worker.refresh_tailnet_host();
+        worker.remember_tailnet_host(status.machine.clone());
         status
     })
     .await

@@ -55,9 +55,14 @@ impl AppState {
     }
 
     pub fn refresh_tailnet_host(&self) {
-        let name = phone::machine_name();
-        if let Ok(mut current) = self.tailnet_host.write() {
-            *current = name;
+        self.remember_tailnet_host(phone::machine_name());
+    }
+
+    pub fn remember_tailnet_host(&self, name: Option<String>) {
+        if let Some(name) = name
+            && let Ok(mut current) = self.tailnet_host.write()
+        {
+            *current = Some(name);
         }
     }
 

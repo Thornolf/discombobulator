@@ -87,6 +87,7 @@ export class LibraryStore {
   #byId = new Map<string, Photo>();
   #undo: UndoEntry[] = [];
   #lastRoot = loadRoot();
+  #photosRoot: string | null = null;
   #pending = loadPending(this.#lastRoot);
   #version = -1;
   #flushing: Promise<void> | null = null;
@@ -165,9 +166,9 @@ export class LibraryStore {
     this.loading = true;
     const startedAt = this.#edits;
     const unsynced = new Set([...this.#pending.values()].map((entry) => entry.id));
+    const root = this.#root;
     try {
       const photos = await api.photos();
-      const root = this.#root;
       for (const photo of photos) {
         const pending = this.#pending.get(pendingId(root, photo.id))?.decision;
         const local = this.#byId.get(photo.id);
@@ -177,14 +178,15 @@ export class LibraryStore {
           photo.decision = { ...local.decision };
         }
       }
-      this.setPhotos(photos);
+      this.setPhotos(photos, root);
       this.error = null;
     } finally {
       this.loading = false;
     }
   }
 
-  setPhotos(photos: Photo[]): void {
+  setPhotos(photos: Photo[], root: string | null = this.#root): void {
+    this.#photosRoot = root;
     this.photos = photos;
     this.#byId = new Map(this.photos.map((photo) => [photo.id, photo]));
   }
@@ -218,7 +220,7 @@ export class LibraryStore {
         this.#undo.shift();
       }
     }
-    const root = this.#root;
+    const root = this.#photosRoot ?? this.#root;
     for (const change of effective) {
       const photo = this.#byId.get(change.id);
       if (photo) {

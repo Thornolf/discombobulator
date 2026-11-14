@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from "svelte";
   import Stacks from "./desktop/Stacks.svelte";
   import { LibraryStore } from "./lib/library.svelte";
-  import { registerServiceWorker } from "./lib/offline";
+  import { registerServiceWorker, unregisterServiceWorkers } from "./lib/offline";
   import { pickShell } from "./lib/shell";
   import Swipe from "./phone/Swipe.svelte";
 
@@ -15,6 +15,7 @@
 
   onMount(() => {
     if (shell === "phone") registerServiceWorker();
+    else unregisterServiceWorkers();
     store.start();
   });
   onDestroy(() => store.stop());
