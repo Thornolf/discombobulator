@@ -6,8 +6,8 @@ Tailscale. `SPEC.md` is the source of truth for behavior. Read it before changin
 ## Repository rules
 
 - Everything in English: code, commits, docs, issues.
-- Zero comments in code. Names and structure carry the meaning. This covers Rust, TypeScript, Svelte,
-  CSS and config files that allow comments.
+- Zero comments in code. Names and structure carry the meaning. This covers Rust, TypeScript, Svelte
+  and CSS, and is enforced by `scripts/check-no-comments.py` and the ESLint `local/no-comments` rule.
 - Every merge to `main` goes through a pull request. Commits follow Conventional Commits
   (`feat:`, `fix:`, `chore:`, `docs:`, `ci:`, `refactor:`, `test:`, `perf:`), because release-please
   builds the changelog and the version from them.
@@ -45,7 +45,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 npm --prefix web run lint && npm --prefix web run check && npm --prefix web test
-./scripts/check-no-comments.sh
+python3 scripts/check-no-comments.py
 cargo run -p discombobulator-server -- serve
 cargo run -p discombobulator-server --release -- bench <folder>
 ```

@@ -7,29 +7,26 @@ on:
 permissions: {}
 
 concurrency:
-  group: review-${{ github.event.pull_request.number }}-${{ github.sha }}
+  group: review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  review:
-    name: ${{ matrix.reviewer }}
-    if: ${{ !startsWith(github.head_ref, 'release-please--') && github.actor != 'dependabot[bot]' }}
+  code-reviewer:
+    if: >-
+      ${{ !(github.event.pull_request.head.repo.full_name == github.repository &&
+      ((startsWith(github.head_ref, 'release-please--') && github.event.pull_request.user.login == 'github-actions[bot]') ||
+      (startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.user.login == 'dependabot[bot]'))) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
-      id-token: write
-    strategy:
-      fail-fast: false
-      matrix:
-        reviewer: [code-reviewer, security-reviewer]
     env:
       HAS_CLAUDE_CREDENTIALS: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' || secrets.ANTHROPIC_API_KEY != '' }}
     steps:
       - name: Require credentials
         if: env.HAS_CLAUDE_CREDENTIALS != 'true'
         run: |
-          echo "::error::Add the CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY secret to run the ${{ matrix.reviewer }} review."
+          echo "::error::Add the CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY secret to run the code-reviewer review."
           exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -48,9 +45,54 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
-            You are the ${{ matrix.reviewer }} defined in .claude/agents/${{ matrix.reviewer }}.md. Follow it exactly.
+            You are the code-reviewer defined in .claude/agents/code-reviewer.md. Follow it exactly.
             Review pull request #${{ github.event.pull_request.number }}: run `git diff origin/${{ github.base_ref }}...HEAD`.
-            Write your findings to review.md, titled "${{ matrix.reviewer }}" and ending with the VERDICT line, then post it with
+            Write your findings to review.md, titled "code-reviewer" and ending with the VERDICT line, then post it with
+            `gh pr comment ${{ github.event.pull_request.number }} --body-file review.md`.
+            Then write only that VERDICT line to the file verdict.txt.
+          claude_args: >-
+            --allowedTools "Read,Glob,Grep,Write,Bash(git diff:*),Bash(git log:*),Bash(gh pr comment:*),Bash(gh pr view:*)"
+      - name: Verdict
+        run: |
+          grep -qx 'VERDICT: PASS' verdict.txt
+
+  security-reviewer:
+    if: >-
+      ${{ !(github.event.pull_request.head.repo.full_name == github.repository &&
+      ((startsWith(github.head_ref, 'release-please--') && github.event.pull_request.user.login == 'github-actions[bot]') ||
+      (startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.user.login == 'dependabot[bot]'))) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      HAS_CLAUDE_CREDENTIALS: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' || secrets.ANTHROPIC_API_KEY != '' }}
+    steps:
+      - name: Require credentials
+        if: env.HAS_CLAUDE_CREDENTIALS != 'true'
+        run: |
+          echo "::error::Add the CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY secret to run the security-reviewer review."
+          exit 1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Use reviewer definitions from the base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          rm -rf .claude CLAUDE.md verdict.txt review.md
+          git checkout "origin/$BASE_REF" -- .claude CLAUDE.md || echo "::warning::The base branch has no reviewer definitions yet."
+          rm -f .claude/settings.json .claude/settings.local.json
+      - uses: anthropics/claude-code-action@f3b070c88125d33dbae5653df5f143101d4ea9dc
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are the security-reviewer defined in .claude/agents/security-reviewer.md. Follow it exactly.
+            Review pull request #${{ github.event.pull_request.number }}: run `git diff origin/${{ github.base_ref }}...HEAD`.
+            Write your findings to review.md, titled "security-reviewer" and ending with the VERDICT line, then post it with
             `gh pr comment ${{ github.event.pull_request.number }} --body-file review.md`.
             Then write only that VERDICT line to the file verdict.txt.
           claude_args: >-
