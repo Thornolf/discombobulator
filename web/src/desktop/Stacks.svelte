@@ -37,6 +37,18 @@
   let anchorId: string | null = null;
   const view = new ViewState();
   const analyses = new SvelteMap<string, Analysis>();
+  const ANALYSES_KEPT = 8;
+
+  function rememberAnalysis(photo: Photo, analysis: Analysis) {
+    const key = analysisKey(photo);
+    analyses.delete(key);
+    analyses.set(key, analysis);
+    while (analyses.size > ANALYSES_KEPT) {
+      const oldest = analyses.keys().next().value;
+      if (oldest === undefined) break;
+      analyses.delete(oldest);
+    }
+  }
   const analysisKey = (photo: Photo) => `${photo.id}:${photo.version}`;
 
   const scenes: Scene[] = $derived(groupScenes(store.photos));
@@ -373,7 +385,7 @@
               showFocus={view.options.focusPoint}
               showClipping={view.options.clipping}
               wantAnalysis={view.options.info && view.options.histogram && photo.id === focused?.id}
-              onanalysis={(analysis) => analyses.set(analysisKey(photo), analysis)}
+              onanalysis={(analysis) => rememberAnalysis(photo, analysis)}
               onfocus={(event) => frameClick(index, event)}
               onrate={(rating) => rate(photo, rating)}
               onsolo={() => {

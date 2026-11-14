@@ -37,6 +37,7 @@
 
   let loaded = $state(false);
   let image = $state<HTMLImageElement>();
+  let picture = $state<HTMLDivElement>();
   let mask = $state<HTMLCanvasElement>();
   let analysis = $state<Analysis | null>(null);
   let box = $state({ left: 0, top: 0, width: 0, height: 0 });
@@ -74,6 +75,7 @@
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
+    if (picture) observer.observe(picture);
     return () => observer.disconnect();
   });
 
@@ -109,7 +111,7 @@
   ondblclick={onsolo}
   onkeydown={() => undefined}
 >
-  <div class="picture">
+  <div class="picture" bind:this={picture}>
     {#if !loaded}
       <img class="placeholder" src={thumbUrl(photo)} alt="" />
     {/if}

@@ -2,7 +2,7 @@ export const BINS = 64;
 const HIGHLIGHT = 254;
 const SHADOW = 1;
 const ANALYSIS_EDGE = 1024;
-const CACHE_LIMIT = 48;
+const CACHE_LIMIT = 12;
 
 export interface Histogram {
   red: number[];

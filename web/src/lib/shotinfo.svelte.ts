@@ -1,5 +1,5 @@
 import { SvelteMap } from "svelte/reactivity";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import type { Photo, ShotInfo } from "./types";
 
 const LIMIT = 400;
@@ -17,7 +17,11 @@ export class ShotInfoCache {
         .shotInfo(photo)
         .then(
           (info) => this.#remember(key, info),
-          () => this.#remember(key, null),
+          (error: unknown) => {
+            if (error instanceof ApiError && (error.status === 404 || error.status === 422)) {
+              this.#remember(key, null);
+            }
+          },
         )
         .finally(() => {
           this.#pending[key] = false;
