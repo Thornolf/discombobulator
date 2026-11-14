@@ -12,7 +12,9 @@ name = "discombobulator"
 path = "src/main.rs"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 discombobulator-core = { path = "../core" }
+tempfile = "3"
 
 [lints]
 workspace = true
