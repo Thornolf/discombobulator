@@ -291,9 +291,10 @@ pub async fn shot_info(
             .photo(&id)
             .map_err(ApiError::internal)?
             .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "Unknown photo"))?;
-        read_shot_info(&photo)
-            .map(Json)
-            .map_err(|error| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, error))
+        read_shot_info(&photo).map(Json).map_err(|error| {
+            eprintln!("shot info for {id}: {error}");
+            ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "Shot info unavailable")
+        })
     })
     .await
     .map_err(ApiError::internal)?
