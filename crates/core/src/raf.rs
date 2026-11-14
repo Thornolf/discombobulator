@@ -56,6 +56,10 @@ pub fn embedded_jpeg_range(header: &[u8], file_len: u64) -> Result<Range<u64>, R
 }
 
 pub fn read_embedded_jpeg(path: &Path) -> Result<Vec<u8>, RafError> {
+    read_embedded_jpeg_up_to(path, MAX_EMBEDDED_JPEG_LEN)
+}
+
+pub fn read_embedded_jpeg_up_to(path: &Path, limit: u64) -> Result<Vec<u8>, RafError> {
     let mut file = crate::fsx::open_regular(path)?;
     let file_len = file.metadata()?.len();
     let mut header = [0u8; HEADER_LEN];
@@ -66,7 +70,8 @@ pub fn read_embedded_jpeg(path: &Path) -> Result<Vec<u8>, RafError> {
         })?;
     let range = embedded_jpeg_range(&header, file_len)?;
     file.seek(SeekFrom::Start(range.start))?;
-    let length = usize::try_from(range.end - range.start).map_err(|_| RafError::TooLarge)?;
+    let length =
+        usize::try_from((range.end - range.start).min(limit)).map_err(|_| RafError::TooLarge)?;
     let mut jpeg = vec![0u8; length];
     file.read_exact(&mut jpeg)?;
     if !jpeg.starts_with(&[0xFF, 0xD8]) {

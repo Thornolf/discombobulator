@@ -15,11 +15,13 @@ use crate::metadata::{self, CaptureInfo};
 use crate::model::{Decision, Photo};
 use crate::raf;
 use crate::scan::{self, Source};
+use crate::shot::{self, ShotInfo};
 use crate::store::{Rendering, Store, StoreError};
 use crate::xmp;
 
 pub const MAX_JPEG_BYTES: u64 = 64 * 1024 * 1024;
 const PAIRED_RAF_XMP_SCAN: u64 = 512 * 1024;
+const EXIF_HEAD_BYTES: u64 = 256 * 1024;
 const MAX_WORKERS: usize = 8;
 const ON_DEMAND_WORKERS: usize = 2;
 const MAX_FAILURE_SAMPLE: usize = 5;
@@ -144,6 +146,18 @@ pub fn read_display_jpeg(photo: &Photo) -> Result<Vec<u8>, String> {
     }
     let raf = photo.raf.as_ref().ok_or("photo has no file")?;
     raf::read_embedded_jpeg(raf).map_err(|error| error.to_string())
+}
+
+pub fn read_shot_info(photo: &Photo) -> Result<ShotInfo, String> {
+    let head = match (&photo.jpg, &photo.raf) {
+        (Some(jpg), _) => {
+            fsx::read_limited(jpg, EXIF_HEAD_BYTES).map_err(|error| error.to_string())?
+        }
+        (None, Some(raf)) => raf::read_embedded_jpeg_up_to(raf, EXIF_HEAD_BYTES)
+            .map_err(|error| error.to_string())?,
+        (None, None) => return Err("photo has no file".to_owned()),
+    };
+    Ok(shot::shot_info(&head))
 }
 
 fn photo_from_source(source: &Source) -> Photo {
@@ -528,6 +542,32 @@ mod tests {
         for photo in &photos {
             assert!(library.image(&photo.id, Variant::Thumb)?.is_some());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn reads_shot_info_from_jpg_and_raf_only_photos() -> Result<(), LibraryError> {
+        let model = |name: &[u8]| {
+            crate::shot::fixtures::exif_jpeg(&[exif::Field {
+                tag: exif::Tag::Model,
+                ifd_num: exif::In::PRIMARY,
+                value: exif::Value::Ascii(vec![name.to_vec()]),
+            }])
+        };
+        let (_dir, library) = library_with(&[
+            ("A.RAF", raf_with_jpeg(&model(b"X-T5"))),
+            ("B.JPG", model(b"X100VI")),
+        ])?;
+        let mut cameras: Vec<Option<String>> = library
+            .photos()?
+            .iter()
+            .map(|photo| read_shot_info(photo).ok().and_then(|info| info.camera))
+            .collect();
+        cameras.sort();
+        assert_eq!(
+            cameras,
+            vec![Some("X-T5".to_owned()), Some("X100VI".to_owned())]
+        );
         Ok(())
     }
 

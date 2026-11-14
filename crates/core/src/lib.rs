@@ -9,6 +9,7 @@ pub mod raf;
 pub mod recycle;
 pub mod recycle_bin;
 pub mod scan;
+pub mod shot;
 pub mod sidecar;
 pub mod store;
 pub mod xmp;

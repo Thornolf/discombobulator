@@ -7,8 +7,9 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use discombobulator_core::library::{ProgressSnapshot, Variant};
+use discombobulator_core::library::{ProgressSnapshot, Variant, read_shot_info};
 use discombobulator_core::model::{Decision, Photo};
+use discombobulator_core::shot::ShotInfo;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
@@ -274,6 +275,28 @@ async fn image(state: Arc<AppState>, id: String, variant: Variant) -> ApiResult<
     bytes
         .map(image_response)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "No image for this photo"))
+}
+
+pub async fn shot_info(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ShotInfo>> {
+    if !valid_id(&id) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "Invalid photo id"));
+    }
+    let session = session(&state)?;
+    tokio::task::spawn_blocking(move || {
+        let photo = session
+            .library
+            .photo(&id)
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "Unknown photo"))?;
+        read_shot_info(&photo)
+            .map(Json)
+            .map_err(|error| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, error))
+    })
+    .await
+    .map_err(ApiError::internal)?
 }
 
 pub async fn thumb(
