@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/Thornolf/discombobulator/compare/v0.3.1...v0.4.0) (2026-11-14)
+
+
+### Features
+
+* **desktop:** check for updates from a version button in the header ([#70](https://github.com/Thornolf/discombobulator/issues/70)) ([af06d5a](https://github.com/Thornolf/discombobulator/commit/af06d5ae371eedb975c0f249f88344cd5277b63d))
+
 ## [0.3.1](https://github.com/Thornolf/discombobulator/compare/v0.3.0...v0.3.1) (2026-11-14)
 
 
