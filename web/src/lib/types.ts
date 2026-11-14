@@ -73,3 +73,11 @@ export interface DuplicateGroup {
   kind: "exact" | "similar";
   ids: string[];
 }
+
+export interface PhoneStatus {
+  tailscale: boolean;
+  url: string | null;
+  qr_svg: string | null;
+  error: string | null;
+  action_url: string | null;
+}

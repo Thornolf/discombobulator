@@ -2,6 +2,7 @@
   import { SvelteSet } from "svelte/reactivity";
   import ApplyDialog from "../components/ApplyDialog.svelte";
   import FolderPicker from "../components/FolderPicker.svelte";
+  import PhoneDialog from "../components/PhoneDialog.svelte";
   import Help from "../components/Help.svelte";
   import { previewUrl } from "../lib/api";
   import { keepPlan, withFavorite, withMark, withRating, type MarkAction } from "../lib/decisions";
@@ -24,7 +25,7 @@
   let solo = $state(false);
   const selected = new SvelteSet<string>();
   let keymap = $state<Keymap>(loadKeymap());
-  let dialog = $state<"open" | "help" | "apply" | "duplicates" | null>(null);
+  let dialog = $state<"open" | "help" | "apply" | "duplicates" | "phone" | null>(null);
   let toast = $state<string | null>(null);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   let anchorId: string | null = null;
@@ -292,6 +293,7 @@
       >
     {/if}
     <button onclick={nextUndecided}>Next undecided <kbd>N</kbd></button>
+    <button onclick={() => (dialog = "phone")}>Phone</button>
     <button onclick={() => (dialog = "duplicates")} disabled={!store.server?.root}
       >Duplicates <kbd>D</kbd></button
     >
@@ -385,6 +387,8 @@
     }}
     onclose={() => (dialog = null)}
   />
+{:else if dialog === "phone"}
+  <PhoneDialog onclose={() => (dialog = null)} />
 {:else if dialog === "duplicates"}
   <Duplicates
     {store}

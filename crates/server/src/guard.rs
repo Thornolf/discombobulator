@@ -41,7 +41,12 @@ fn is_image_route(path: &str) -> bool {
         .is_some_and(|(_, variant)| variant == "thumb" || variant == "preview")
 }
 
-pub fn check(method: &Method, path: &str, headers: &HeaderMap) -> Result<(), StatusCode> {
+pub fn check(
+    method: &Method,
+    path: &str,
+    headers: &HeaderMap,
+    tailnet_host: Option<&str>,
+) -> Result<(), StatusCode> {
     let host = header_text(headers, HOST).ok_or(StatusCode::BAD_REQUEST)?;
     let forwarded = header_text(headers, FORWARDED_HOST);
     if !is_allowed_host(host) || forwarded.is_some_and(|value| !is_allowed_host(value)) {
@@ -63,7 +68,9 @@ pub fn check(method: &Method, path: &str, headers: &HeaderMap) -> Result<(), Sta
     if let Some(origin) = header_text(headers, ORIGIN) {
         let authority = origin_authority(origin).ok_or(StatusCode::FORBIDDEN)?;
         let same_host = authority.eq_ignore_ascii_case(host)
-            || forwarded.is_some_and(|value| authority.eq_ignore_ascii_case(value));
+            || forwarded.is_some_and(|value| authority.eq_ignore_ascii_case(value))
+            || (origin.starts_with("https://")
+                && tailnet_host.is_some_and(|name| authority.eq_ignore_ascii_case(name)));
         if !same_host {
             return Err(StatusCode::FORBIDDEN);
         }
@@ -71,8 +78,18 @@ pub fn check(method: &Method, path: &str, headers: &HeaderMap) -> Result<(), Sta
     Ok(())
 }
 
-pub async fn middleware(request: Request, next: Next) -> Response {
-    if let Err(status) = check(request.method(), request.uri().path(), request.headers()) {
+pub async fn middleware(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let tailnet = state.tailnet_host.read().ok().and_then(|name| name.clone());
+    if let Err(status) = check(
+        request.method(),
+        request.uri().path(),
+        request.headers(),
+        tailnet.as_deref(),
+    ) {
         return status.into_response();
     }
     let mut response = next.run(request).await;
@@ -122,16 +139,17 @@ mod tests {
     #[test]
     fn api_reads_need_the_csrf_header_but_pages_do_not() {
         let host = ("host", "127.0.0.1:47820");
-        assert_eq!(check(&Method::GET, "/", &headers(&[host])), Ok(()));
+        assert_eq!(check(&Method::GET, "/", &headers(&[host]), None), Ok(()));
         assert_eq!(
-            check(&Method::GET, "/api/folders", &headers(&[host])),
+            check(&Method::GET, "/api/folders", &headers(&[host]), None),
             Err(StatusCode::FORBIDDEN)
         );
         assert_eq!(
             check(
                 &Method::GET,
                 "/api/folders",
-                &headers(&[host, (CSRF_HEADER, "1")])
+                &headers(&[host, (CSRF_HEADER, "1")]),
+                None
             ),
             Ok(())
         );
@@ -141,12 +159,13 @@ mod tests {
     fn images_refuse_cross_site_loads() {
         let host = ("host", "127.0.0.1:47820");
         let path = "/api/photos/0123456789abcdef0123/thumb";
-        assert_eq!(check(&Method::GET, path, &headers(&[host])), Ok(()));
+        assert_eq!(check(&Method::GET, path, &headers(&[host]), None), Ok(()));
         assert_eq!(
             check(
                 &Method::GET,
                 path,
-                &headers(&[host, ("sec-fetch-site", "same-origin")])
+                &headers(&[host, ("sec-fetch-site", "same-origin")]),
+                None
             ),
             Ok(())
         );
@@ -154,7 +173,8 @@ mod tests {
             check(
                 &Method::GET,
                 path,
-                &headers(&[host, ("sec-fetch-site", "cross-site")])
+                &headers(&[host, ("sec-fetch-site", "cross-site")]),
+                None
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -166,7 +186,8 @@ mod tests {
             check(
                 &Method::GET,
                 "/index.html",
-                &headers(&[("host", "127.0.0.1:47820")])
+                &headers(&[("host", "127.0.0.1:47820")]),
+                None
             ),
             Ok(())
         );
@@ -178,7 +199,8 @@ mod tests {
             check(
                 &Method::GET,
                 "/api/library",
-                &headers(&[("host", "attacker.example:47820")])
+                &headers(&[("host", "attacker.example:47820")]),
+                None
             ),
             Err(StatusCode::MISDIRECTED_REQUEST)
         );
@@ -189,7 +211,8 @@ mod tests {
                 &headers(&[
                     ("host", "127.0.0.1:47820"),
                     ("x-forwarded-host", "evil.com")
-                ])
+                ]),
+                None
             ),
             Err(StatusCode::MISDIRECTED_REQUEST)
         );
@@ -199,14 +222,15 @@ mod tests {
     fn writes_need_csrf_header_and_matching_origin() {
         let host = ("host", "127.0.0.1:47820");
         assert_eq!(
-            check(&Method::POST, "/api/library", &headers(&[host])),
+            check(&Method::POST, "/api/library", &headers(&[host]), None),
             Err(StatusCode::FORBIDDEN)
         );
         assert_eq!(
             check(
                 &Method::POST,
                 "/api/library",
-                &headers(&[host, (CSRF_HEADER, "1")])
+                &headers(&[host, (CSRF_HEADER, "1")]),
+                None
             ),
             Ok(())
         );
@@ -218,7 +242,8 @@ mod tests {
                     host,
                     (CSRF_HEADER, "1"),
                     ("origin", "http://127.0.0.1:47820")
-                ])
+                ]),
+                None
             ),
             Ok(())
         );
@@ -226,7 +251,8 @@ mod tests {
             check(
                 &Method::PUT,
                 "/api/library",
-                &headers(&[host, (CSRF_HEADER, "1"), ("origin", "https://evil.ts.net")])
+                &headers(&[host, (CSRF_HEADER, "1"), ("origin", "https://evil.ts.net")]),
+                None
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -234,7 +260,35 @@ mod tests {
             check(
                 &Method::PUT,
                 "/api/library",
-                &headers(&[host, (CSRF_HEADER, "1"), ("origin", "null")])
+                &headers(&[host, (CSRF_HEADER, "1"), ("origin", "null")]),
+                None
+            ),
+            Err(StatusCode::FORBIDDEN)
+        );
+    }
+
+    #[test]
+    fn tailnet_origin_matches_the_machine_name() {
+        let headers = headers(&[
+            ("host", "127.0.0.1:47820"),
+            (CSRF_HEADER, "1"),
+            ("origin", "https://desk.tail1234.ts.net"),
+        ]);
+        assert_eq!(
+            check(
+                &Method::POST,
+                "/api/decisions",
+                &headers,
+                Some("desk.tail1234.ts.net")
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            check(
+                &Method::POST,
+                "/api/decisions",
+                &headers,
+                Some("other.tail1234.ts.net")
             ),
             Err(StatusCode::FORBIDDEN)
         );
@@ -251,7 +305,8 @@ mod tests {
                     ("x-forwarded-host", "desk.tail1234.ts.net"),
                     (CSRF_HEADER, "1"),
                     ("origin", "https://desk.tail1234.ts.net")
-                ])
+                ]),
+                None
             ),
             Ok(())
         );

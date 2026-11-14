@@ -6,6 +6,7 @@ const server = {
   photos: [] as Photo[],
   decided: [] as DecisionChange[][],
   photosGate: null as Promise<void> | null,
+  unreachable: false,
 };
 
 vi.mock("./api", () => ({
@@ -26,6 +27,7 @@ vi.mock("./api", () => ({
     },
     open: async () => ({ root: "/p", version: 2, processing: false, progress: null }),
     decide: async (changes: DecisionChange[]) => {
+      if (server.unreachable) throw new Error("offline");
       server.decided.push(changes);
       for (const change of changes) {
         const target = server.photos.find((item) => item.id === change.id);
@@ -50,6 +52,7 @@ describe("LibraryStore", () => {
     server.photos = [photo("a", 0), photo("b", 1)];
     server.decided = [];
     server.photosGate = null;
+    server.unreachable = false;
   });
 
   it("syncs decisions and undoes a multi-photo change at once", async () => {
@@ -83,5 +86,36 @@ describe("LibraryStore", () => {
     store.decide([{ id: "b", decision: { mark: "unsure", favorite: false, rating: 0 } }]);
     await store.open("/other");
     expect(server.decided.flat().some((change) => change.id === "b")).toBe(true);
+  });
+
+  it("marks for another folder stay queued", async () => {
+    const store = await loaded();
+    server.unreachable = true;
+    store.decide([{ id: "a", decision: { mark: "delete", favorite: false, rating: 0 } }]);
+    await store.flush();
+    expect(store.pendingCount).toBe(1);
+    server.unreachable = false;
+    store.server = { root: "/q", version: 1, processing: false, progress: null };
+    store.setPhotos(store.photos, "/q");
+    store.decide([{ id: "b", decision: { mark: "approved", favorite: false, rating: 0 } }]);
+    await store.flush();
+    expect(server.decided.flat().map((change) => change.id)).toEqual(["b"]);
+    expect(store.pendingCount).toBe(1);
+    store.server = { root: "/p", version: 1, processing: false, progress: null };
+    await store.flush();
+    expect(server.decided.flat().map((change) => change.id)).toEqual(["b", "a"]);
+    expect(store.pendingCount).toBe(0);
+  });
+
+  it("tags marks with the folder of the list on screen during a folder switch", async () => {
+    const store = await loaded();
+    store.server = { root: "/q", version: 2, processing: false, progress: null };
+    server.unreachable = true;
+    store.decide([{ id: "a", decision: { mark: "delete", favorite: false, rating: 0 } }]);
+    await store.flush();
+    server.unreachable = false;
+    await store.flush();
+    expect(server.decided.flat().map((change) => change.id)).toEqual([]);
+    expect(store.pendingCount).toBe(1);
   });
 });

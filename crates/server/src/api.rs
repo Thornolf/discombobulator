@@ -378,3 +378,31 @@ pub async fn duplicates(
     .map_err(ApiError::internal)?
     .map(Json)
 }
+
+pub async fn phone_status(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<crate::phone::PhoneStatus>> {
+    let worker = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || {
+        let status = crate::phone::status(worker.port);
+        worker.remember_tailnet_host(status.machine.clone());
+        status
+    })
+    .await
+    .map(Json)
+    .map_err(ApiError::internal)
+}
+
+pub async fn phone_enable(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<crate::phone::PhoneStatus>> {
+    let worker = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || {
+        let status = crate::phone::enable(worker.port);
+        worker.remember_tailnet_host(status.machine.clone());
+        status
+    })
+    .await
+    .map(Json)
+    .map_err(ApiError::internal)
+}
