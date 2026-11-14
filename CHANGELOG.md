@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/Thornolf/discombobulator/compare/v0.3.0...v0.3.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **core:** bump the decision sequence when a decision follows a photo to its new id ([#67](https://github.com/Thornolf/discombobulator/issues/67)) ([6aea5fc](https://github.com/Thornolf/discombobulator/commit/6aea5fc29f740147c33ee831babb95d5bdeb7fd2))
+
 ## [0.3.0](https://github.com/Thornolf/discombobulator/compare/v0.2.0...v0.3.0) (2026-11-14)
 
 
