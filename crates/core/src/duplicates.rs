@@ -353,7 +353,7 @@ mod tests {
                     photo
                         .dir
                         .join(photo.name())
-                        .strip_prefix(&root)
+                        .strip_prefix(library.root())
                         .map(|p| p.to_string_lossy().into_owned())
                         .unwrap_or_default()
                 })
