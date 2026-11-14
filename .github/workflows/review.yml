@@ -1,0 +1,49 @@
+name: AI review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: ${{ matrix.reviewer }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        reviewer: [code-reviewer, security-reviewer]
+    env:
+      HAS_CLAUDE_CREDENTIALS: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' || secrets.ANTHROPIC_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Missing credentials
+        if: env.HAS_CLAUDE_CREDENTIALS != 'true'
+        run: echo "::warning::Add the CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY secret to run the ${{ matrix.reviewer }} review."
+      - uses: anthropics/claude-code-action@v1
+        if: env.HAS_CLAUDE_CREDENTIALS == 'true'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are the ${{ matrix.reviewer }} defined in .claude/agents/${{ matrix.reviewer }}.md. Follow it exactly.
+            Review pull request #${{ github.event.pull_request.number }}: run `git diff origin/${{ github.base_ref }}...HEAD`.
+            Post your findings as one PR comment with `gh pr comment ${{ github.event.pull_request.number }} --body-file review.md`,
+            titled "${{ matrix.reviewer }}", ending with the VERDICT line.
+            Then write only that VERDICT line to the file `verdict.txt`.
+          claude_args: >-
+            --allowedTools "Read,Glob,Grep,Write,Bash(git diff:*),Bash(git log:*),Bash(gh pr comment:*),Bash(gh pr view:*)"
+      - name: Verdict
+        if: env.HAS_CLAUDE_CREDENTIALS == 'true'
+        run: grep -qx 'VERDICT: PASS' verdict.txt
