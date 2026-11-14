@@ -23,6 +23,7 @@ pub struct AppState {
     pub cache: Arc<Cache>,
     pub session: RwLock<Option<Arc<session::Session>>>,
     pub version: Arc<AtomicU64>,
+    pub apply_lock: std::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -35,6 +36,7 @@ impl AppState {
             cache: Arc::new(Cache::new(data_dir.join("cache"))?),
             session: RwLock::new(None),
             version: Arc::new(AtomicU64::new(1)),
+            apply_lock: std::sync::Mutex::new(()),
         }))
     }
 
@@ -54,6 +56,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/photos/{id}/thumb", get(api::thumb))
         .route("/api/photos/{id}/preview", get(api::preview))
         .route("/api/decisions", post(api::decisions))
+        .route("/api/apply", get(api::apply_plan).post(api::apply))
         .fallback(assets::serve)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn(guard::middleware))

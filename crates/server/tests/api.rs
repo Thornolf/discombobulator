@@ -190,3 +190,46 @@ async fn opening_a_missing_folder_is_a_client_error() -> TestResult {
     assert_eq!(status, StatusCode::CONFLICT);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn apply_moves_deleted_photos_and_writes_sidecars() -> TestResult {
+    let fixture = fixture()?;
+    let photos = open_and_wait(&fixture).await?;
+    let first = photos[0]["id"].as_str().unwrap_or_default().to_owned();
+    let second = photos[1]["id"].as_str().unwrap_or_default().to_owned();
+    let body = json!({ "changes": [
+        { "id": first, "decision": { "mark": "delete", "favorite": false, "rating": 0 } },
+        { "id": second, "decision": { "mark": "approved", "favorite": false, "rating": 2 } }
+    ]});
+    send(
+        &fixture.state,
+        request("POST", "/api/decisions", Some(body))?,
+    )
+    .await?;
+    let (_, plan) = send(&fixture.state, request("GET", "/api/apply", None)?).await?;
+    assert_eq!(
+        plan,
+        json!({ "sidecars": 2, "deletes": 1, "files_to_move": 1 })
+    );
+    let (status, report) = send(&fixture.state, request("POST", "/api/apply", None)?).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(report["photos_moved"], json!(1));
+    assert!(
+        fixture
+            .photos
+            .join("_to_delete")
+            .join("DSCF0001.JPG")
+            .is_file()
+    );
+    assert!(
+        fixture
+            .photos
+            .join("_to_delete")
+            .join("DSCF0001.xmp")
+            .is_file()
+    );
+    assert!(fixture.photos.join("DSCF0002.xmp").is_file());
+    let (_, photos) = send(&fixture.state, request("GET", "/api/photos", None)?).await?;
+    assert_eq!(photos.as_array().map(Vec::len), Some(1));
+    Ok(())
+}

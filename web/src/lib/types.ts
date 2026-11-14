@@ -55,3 +55,16 @@ export interface DecisionChange {
 }
 
 export const emptyDecision: Decision = { mark: null, favorite: false, rating: 0 };
+
+export interface ApplyPlan {
+  sidecars: number;
+  deletes: number;
+  files_to_move: number;
+}
+
+export interface ApplyReport {
+  sidecars_written: number;
+  photos_moved: number;
+  files_moved: number;
+  failures: { name: string; error: string }[];
+}
