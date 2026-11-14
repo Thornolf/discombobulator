@@ -334,3 +334,26 @@ pub async fn apply(
     version.fetch_add(1, Ordering::Relaxed);
     Ok(Json(report))
 }
+
+#[derive(Deserialize)]
+pub struct DuplicateQuery {
+    tolerance: Option<u32>,
+}
+
+pub async fn duplicates(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DuplicateQuery>,
+) -> ApiResult<Json<Vec<discombobulator_core::duplicates::Group>>> {
+    let session = session(&state)?;
+    let tolerance = query
+        .tolerance
+        .unwrap_or(6)
+        .min(discombobulator_core::duplicates::MAX_TOLERANCE);
+    tokio::task::spawn_blocking(move || {
+        discombobulator_core::duplicates::find_duplicates(&session.library, tolerance)
+    })
+    .await
+    .map_err(ApiError::internal)?
+    .map(Json)
+    .map_err(ApiError::internal)
+}

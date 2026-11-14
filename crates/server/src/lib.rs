@@ -57,6 +57,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/photos/{id}/preview", get(api::preview))
         .route("/api/decisions", post(api::decisions))
         .route("/api/apply", get(api::apply_plan).post(api::apply))
+        .route("/api/duplicates", get(api::duplicates))
         .fallback(assets::serve)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn(guard::middleware))

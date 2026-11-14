@@ -233,3 +233,18 @@ async fn apply_moves_deleted_photos_and_writes_sidecars() -> TestResult {
     assert_eq!(photos.as_array().map(Vec::len), Some(1));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reports_exact_duplicates() -> TestResult {
+    let fixture = fixture()?;
+    open_and_wait(&fixture).await?;
+    let (status, groups) = send(
+        &fixture.state,
+        request("GET", "/api/duplicates?tolerance=99", None)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(groups[0]["kind"], json!("exact"));
+    assert_eq!(groups[0]["ids"].as_array().map(Vec::len), Some(2));
+    Ok(())
+}

@@ -14,6 +14,12 @@ pub enum StoreError {
     Poisoned,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileHashes {
+    pub quick: String,
+    pub full: Option<String>,
+}
+
 pub struct Store {
     connection: Mutex<Connection>,
 }
@@ -122,6 +128,17 @@ impl Store {
         if version < 1 {
             connection.execute_batch(SCHEMA)?;
             connection.pragma_update(None, "user_version", 1)?;
+        }
+        if version < 2 {
+            connection.execute_batch(
+                "CREATE TABLE IF NOT EXISTS hashes (
+                    id TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL,
+                    quick TEXT NOT NULL,
+                    full TEXT
+                );",
+            )?;
+            connection.pragma_update(None, "user_version", 2)?;
         }
         Ok(Store {
             connection: Mutex::new(connection),
@@ -245,6 +262,37 @@ impl Store {
                 decision.rating,
                 now_ms
             ],
+        )?;
+        Ok(())
+    }
+
+    pub fn hashes(&self, id: &str, fingerprint: &str) -> Result<Option<FileHashes>, StoreError> {
+        Ok(self
+            .lock()?
+            .query_row(
+                "SELECT quick, full FROM hashes WHERE id = ?1 AND fingerprint = ?2",
+                params![id, fingerprint],
+                |row| {
+                    Ok(FileHashes {
+                        quick: row.get(0)?,
+                        full: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn save_hashes(
+        &self,
+        id: &str,
+        fingerprint: &str,
+        hashes: &FileHashes,
+    ) -> Result<(), StoreError> {
+        self.lock()?.execute(
+            "INSERT INTO hashes (id, fingerprint, quick, full) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET fingerprint = excluded.fingerprint, quick = excluded.quick,
+                 full = excluded.full",
+            params![id, fingerprint, hashes.quick, hashes.full],
         )?;
         Ok(())
     }
@@ -432,6 +480,19 @@ mod tests {
         let stored = store.photo(&p.id)?;
         assert_eq!(stored.as_ref().map(Photo::is_processed), Some(true));
         assert_eq!(stored.and_then(|p| p.dhash), Some(u64::MAX));
+        Ok(())
+    }
+
+    #[test]
+    fn hashes_are_tied_to_the_fingerprint() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        let hashes = FileHashes {
+            quick: "q".into(),
+            full: Some("f".into()),
+        };
+        store.save_hashes("id", "v1", &hashes)?;
+        assert_eq!(store.hashes("id", "v1")?, Some(hashes));
+        assert_eq!(store.hashes("id", "v2")?, None);
         Ok(())
     }
 
