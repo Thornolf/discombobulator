@@ -26,8 +26,9 @@ export function extendDeck(
   photos: readonly { id: string; decision: Decision }[],
   mode: DeckMode,
   position = 0,
+  departed: ReadonlySet<string> = new Set(),
 ): string[] {
-  const known = new Set(deck.slice(position));
+  const known = new Set(deck.filter((id, index) => index >= position || !departed.has(id)));
   const fresh = photos
     .filter((photo) => !known.has(photo.id) && belongsInDeck(mode, photo.decision))
     .map((photo) => photo.id);

@@ -25,6 +25,7 @@
 
   let mode = $state<DeckMode>("inbox");
   let deck = $state<string[]>([]);
+  const departed = new Set<string>();
   let position = $state(0);
   let history: number[] = [];
   let started = $state(false);
@@ -77,6 +78,7 @@
 
   function begin(next: DeckMode) {
     mode = next;
+    departed.clear();
     deck = extendDeck([], photos, next);
     position = 0;
     history = [];
@@ -91,12 +93,14 @@
     const latest = photos;
     if (!untrack(() => started)) return;
     const known = untrack(() => deck);
-    const extended = extendDeck(
-      known,
-      latest,
-      untrack(() => mode),
-      untrack(() => position),
-    );
+    const at = untrack(() => position);
+    const pile = untrack(() => mode);
+    for (const id of known.slice(0, at)) {
+      const photo = untrack(() => store.photo(id));
+      if (photo && !belongsInDeck(pile, photo.decision)) departed.add(id);
+    }
+    const extended = extendDeck(known, latest, pile, at, departed);
+    for (const id of extended.slice(known.length)) departed.delete(id);
     if (extended.length !== known.length) deck = extended;
   });
 

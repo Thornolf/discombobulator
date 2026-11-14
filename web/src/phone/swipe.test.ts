@@ -36,8 +36,17 @@ describe("deck", () => {
 
   it("brings back a card that returned to the inbox after it was swiped", () => {
     const photos = [photo("a", 0), photo("c", 1, { decision: decided({ mark: "approved" }) })];
-    expect(extendDeck(["a", "c"], photos, "inbox", 2)).toEqual(["a", "c", "a"]);
-    expect(extendDeck(["a", "c", "a"], photos, "inbox", 2)).toEqual(["a", "c", "a"]);
+    expect(extendDeck(["a", "c"], photos, "inbox", 2, new Set(["a"]))).toEqual(["a", "c", "a"]);
+    expect(extendDeck(["a", "c", "a"], photos, "inbox", 2, new Set(["a"]))).toEqual(["a", "c", "a"]);
+  });
+
+  it("does not bring back a card that never left the deck's pile", () => {
+    const photos = [
+      photo("u1", 0, { decision: decided({ mark: "unsure" }) }),
+      photo("u2", 1, { decision: decided({ mark: "approved" }) }),
+      photo("u3", 2, { decision: decided({ mark: "unsure" }) }),
+    ];
+    expect(extendDeck(["u1", "u2", "u3"], photos, "unsure", 2, new Set(["u2"]))).toEqual(["u1", "u2", "u3"]);
   });
 
   it("knows which cards still belong to the deck", () => {
