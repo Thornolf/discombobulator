@@ -52,20 +52,15 @@ Tailscale.
 2. In Discombobulator click **Phone → Enable phone access** and scan the QR code.
 3. In Safari tap **Share → Add to Home Screen**, then open **Cull** from the Home Screen.
 4. For culling without the PC, open the menu and **Download this folder for offline**. Marks sync back
-   when the PC is reachable again.
+   when the PC is reachable and has that same folder open.
 
 The app listens on `127.0.0.1` only; the phone reaches it through `tailscale serve`, so it is never exposed
 on your network or the internet.
 
-## Benchmark
-
-```sh
-discombobulator bench --fresh "D:\Photos\2026-10-12"
-```
-
 ## Develop
 
 ```sh
+cargo run --release -p discombobulator-server -- bench --fresh "D:\Photos\2026-10-12"
 npm --prefix web ci
 npm --prefix web run build
 cargo run -p discombobulator-server -- serve
