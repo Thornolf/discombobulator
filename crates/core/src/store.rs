@@ -35,9 +35,7 @@ CREATE TABLE IF NOT EXISTS photos (
     camera_rating INTEGER,
     width INTEGER,
     height INTEGER,
-    error TEXT,
-    quick_hash TEXT,
-    full_hash TEXT
+    error TEXT
 );
 CREATE INDEX IF NOT EXISTS photos_dir ON photos(dir);
 CREATE TABLE IF NOT EXISTS decisions (
@@ -55,7 +53,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 const PHOTO_COLUMNS: &str = "p.id, p.dir, p.stem, p.raf, p.jpg, p.size, p.modified_ms, p.fingerprint,
     p.processed_fingerprint, p.capture_ms, p.orientation, p.dhash, p.camera_rating, p.width, p.height,
-    p.error, p.quick_hash, p.full_hash, d.mark, d.favorite, d.rating";
+    p.error, d.mark, d.favorite, d.rating";
 
 fn path_text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
@@ -63,9 +61,9 @@ fn path_text(path: &Path) -> String {
 
 fn photo_from_row(row: &Row<'_>) -> rusqlite::Result<Photo> {
     let optional_path = |value: Option<String>| value.map(PathBuf::from);
-    let mark: Option<String> = row.get(18)?;
-    let favorite: Option<bool> = row.get(19)?;
-    let rating: Option<u8> = row.get(20)?;
+    let mark: Option<String> = row.get(16)?;
+    let favorite: Option<bool> = row.get(17)?;
+    let rating: Option<u8> = row.get(18)?;
     Ok(Photo {
         id: row.get(0)?,
         dir: PathBuf::from(row.get::<_, String>(1)?),
@@ -83,8 +81,6 @@ fn photo_from_row(row: &Row<'_>) -> rusqlite::Result<Photo> {
         width: row.get(13)?,
         height: row.get(14)?,
         error: row.get(15)?,
-        quick_hash: row.get(16)?,
-        full_hash: row.get(17)?,
         decision: Decision {
             mark: mark.as_deref().and_then(Mark::parse),
             favorite: favorite.unwrap_or(false),
@@ -117,7 +113,11 @@ impl Store {
     fn init(connection: Connection) -> Result<Store, StoreError> {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "NORMAL")?;
-        connection.execute_batch(SCHEMA)?;
+        let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version < 1 {
+            connection.execute_batch(SCHEMA)?;
+            connection.pragma_update(None, "user_version", 1)?;
+        }
         Ok(Store {
             connection: Mutex::new(connection),
         })
@@ -165,8 +165,10 @@ impl Store {
             let keep: std::collections::HashSet<&str> =
                 photos.iter().map(|p| p.id.as_str()).collect();
             let mut delete = transaction.prepare("DELETE FROM photos WHERE id = ?1")?;
+            let mut forget = transaction.prepare("DELETE FROM decisions WHERE id = ?1")?;
             for id in existing.iter().filter(|id| !keep.contains(id.as_str())) {
                 delete.execute(params![id])?;
+                forget.execute(params![id])?;
             }
             let mut upsert = transaction.prepare(
                 "INSERT INTO photos (id, dir, stem, raf, jpg, size, modified_ms, fingerprint)
@@ -211,22 +213,6 @@ impl Store {
         Ok(())
     }
 
-    pub fn save_hashes(&self, id: &str, quick: &str, full: Option<&str>) -> Result<(), StoreError> {
-        self.lock()?.execute(
-            "UPDATE photos SET quick_hash = ?2, full_hash = COALESCE(?3, full_hash) WHERE id = ?1",
-            params![id, quick, full],
-        )?;
-        Ok(())
-    }
-
-    pub fn clear_hashes(&self, id: &str) -> Result<(), StoreError> {
-        self.lock()?.execute(
-            "UPDATE photos SET quick_hash = NULL, full_hash = NULL WHERE id = ?1",
-            params![id],
-        )?;
-        Ok(())
-    }
-
     pub fn set_decision(
         &self,
         id: &str,
@@ -250,27 +236,6 @@ impl Store {
                 ],
             )?;
         }
-        Ok(())
-    }
-
-    pub fn move_photo(&self, id: &str, photo: &Photo) -> Result<(), StoreError> {
-        let mut connection = self.lock()?;
-        let transaction = connection.transaction()?;
-        transaction.execute(
-            "UPDATE photos SET id = ?2, dir = ?3, raf = ?4, jpg = ?5 WHERE id = ?1",
-            params![
-                id,
-                photo.id,
-                path_text(&photo.dir),
-                photo.raf.as_deref().map(path_text),
-                photo.jpg.as_deref().map(path_text)
-            ],
-        )?;
-        transaction.execute(
-            "UPDATE decisions SET id = ?2 WHERE id = ?1",
-            params![id, photo.id],
-        )?;
-        transaction.commit()?;
         Ok(())
     }
 
@@ -318,10 +283,28 @@ mod tests {
             width: None,
             height: None,
             error: None,
-            quick_hash: None,
-            full_hash: None,
             decision: Decision::default(),
         }
+    }
+
+    #[test]
+    fn removed_photo_forgets_its_decision() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        let p = photo("/p", "A");
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p))?;
+        let delete = Decision {
+            mark: Some(Mark::Delete),
+            favorite: false,
+            rating: 0,
+        };
+        store.set_decision(&p.id, delete, 1)?;
+        store.replace_photos(Path::new("/p"), &[])?;
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p))?;
+        assert_eq!(
+            store.photo(&p.id)?.map(|p| p.decision),
+            Some(Decision::default())
+        );
+        Ok(())
     }
 
     #[test]

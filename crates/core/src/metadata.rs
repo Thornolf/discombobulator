@@ -2,18 +2,24 @@ use std::io::Cursor;
 
 use exif::{In, Reader, Tag, Value};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CaptureInfo {
     pub capture_ms: Option<i64>,
     pub orientation: u16,
 }
 
-pub fn capture_info(jpeg: &[u8]) -> CaptureInfo {
-    let Ok(exif) = Reader::new().read_from_container(&mut Cursor::new(jpeg)) else {
-        return CaptureInfo {
+impl Default for CaptureInfo {
+    fn default() -> Self {
+        CaptureInfo {
             capture_ms: None,
             orientation: 1,
-        };
+        }
+    }
+}
+
+pub fn capture_info(jpeg: &[u8]) -> CaptureInfo {
+    let Ok(exif) = Reader::new().read_from_container(&mut Cursor::new(jpeg)) else {
+        return CaptureInfo::default();
     };
     let orientation = exif
         .get_field(Tag::Orientation, In::PRIMARY)
@@ -31,7 +37,6 @@ pub fn capture_info(jpeg: &[u8]) -> CaptureInfo {
             })
     };
     let capture_ms = ascii(Tag::DateTimeOriginal)
-        .or_else(|| ascii(Tag::DateTime))
         .and_then(|text| parse_exif_datetime(&text))
         .map(|seconds| {
             let fraction = ascii(Tag::SubSecTimeOriginal)
@@ -123,6 +128,59 @@ mod tests {
         assert_eq!(sub_second_ms("05"), 50);
         assert_eq!(sub_second_ms("123456"), 123);
         assert_eq!(sub_second_ms(""), 0);
+    }
+
+    fn jpeg_with_exif(fields: &[exif::Field]) -> Vec<u8> {
+        let mut writer = exif::experimental::Writer::new();
+        for field in fields {
+            writer.push_field(field);
+        }
+        let mut tiff = std::io::Cursor::new(Vec::new());
+        if writer.write(&mut tiff, false).is_err() {
+            return Vec::new();
+        }
+        let tiff = tiff.into_inner();
+        let length = u16::try_from(tiff.len() + 8).unwrap_or(u16::MAX);
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        jpeg.extend_from_slice(&length.to_be_bytes());
+        jpeg.extend_from_slice(b"Exif\0\0");
+        jpeg.extend_from_slice(&tiff);
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+        jpeg
+    }
+
+    fn ascii_field(tag: Tag, text: &str) -> exif::Field {
+        exif::Field {
+            tag,
+            ifd_num: In::PRIMARY,
+            value: Value::Ascii(vec![text.as_bytes().to_vec()]),
+        }
+    }
+
+    #[test]
+    fn reads_capture_time_sub_seconds_and_orientation() {
+        let jpeg = jpeg_with_exif(&[
+            ascii_field(Tag::DateTimeOriginal, "2026:10:12 08:42:10"),
+            ascii_field(Tag::SubSecTimeOriginal, "25"),
+            exif::Field {
+                tag: Tag::Orientation,
+                ifd_num: In::PRIMARY,
+                value: Value::Short(vec![6]),
+            },
+        ]);
+        assert_eq!(
+            capture_info(&jpeg),
+            CaptureInfo {
+                capture_ms: Some(1_791_794_530_250),
+                orientation: 6
+            }
+        );
+    }
+
+    #[test]
+    fn ignores_modification_date_without_capture_date() {
+        let jpeg = jpeg_with_exif(&[ascii_field(Tag::DateTime, "2026:10:12 08:42:10")]);
+        assert_eq!(capture_info(&jpeg).capture_ms, None);
     }
 
     #[test]

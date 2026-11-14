@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::path::Path;
@@ -49,7 +48,7 @@ pub fn embedded_jpeg_range(header: &[u8], file_len: u64) -> Result<Range<u64>, R
     if length > MAX_EMBEDDED_JPEG_LEN {
         return Err(RafError::TooLarge);
     }
-    let end = offset.checked_add(length).ok_or(RafError::OutOfBounds)?;
+    let end = offset + length;
     if end > file_len {
         return Err(RafError::OutOfBounds);
     }
@@ -57,7 +56,7 @@ pub fn embedded_jpeg_range(header: &[u8], file_len: u64) -> Result<Range<u64>, R
 }
 
 pub fn read_embedded_jpeg(path: &Path) -> Result<Vec<u8>, RafError> {
-    let mut file = File::open(path)?;
+    let mut file = crate::fsx::open_regular(path)?;
     let file_len = file.metadata()?.len();
     let mut header = [0u8; HEADER_LEN];
     file.read_exact(&mut header)
@@ -74,12 +73,6 @@ pub fn read_embedded_jpeg(path: &Path) -> Result<Vec<u8>, RafError> {
         return Err(RafError::NotJpeg);
     }
     Ok(jpeg)
-}
-
-pub fn read_head(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    File::open(path)?.take(limit).read_to_end(&mut bytes)?;
-    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -146,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_overflowing_range() {
+    fn rejects_oversized_embedded_jpeg() {
         assert!(matches!(
             embedded_jpeg_range(&header_with(u32::MAX, u32::MAX), u64::MAX),
             Err(RafError::TooLarge)

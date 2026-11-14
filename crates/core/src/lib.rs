@@ -1,3 +1,4 @@
+pub mod fsx;
 pub mod imaging;
 pub mod library;
 pub mod metadata;
@@ -12,6 +13,5 @@ use std::path::PathBuf;
 pub const APP_NAME: &str = "discombobulator";
 
 pub fn data_dir() -> Option<PathBuf> {
-    directories::ProjectDirs::from("com", "thornolf", APP_NAME)
-        .map(|dirs| dirs.data_local_dir().to_path_buf())
+    directories::BaseDirs::new().map(|dirs| dirs.data_local_dir().join(APP_NAME))
 }

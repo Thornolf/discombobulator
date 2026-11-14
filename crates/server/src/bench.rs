@@ -13,7 +13,7 @@ pub fn run(folder: &Path, fresh: bool) -> Result<(), Box<dyn Error>> {
     } else {
         discombobulator_core::data_dir().ok_or("no local data folder for this user")?
     };
-    std::fs::create_dir_all(&data_dir)?;
+    discombobulator_core::fsx::create_private_dir(&data_dir)?;
     let store = Arc::new(Store::open(&data_dir.join("library.sqlite3"))?);
     let cache = Arc::new(Cache::new(data_dir.join("cache"))?);
 

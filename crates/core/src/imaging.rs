@@ -12,6 +12,7 @@ pub const THUMB_EDGE: u32 = 360;
 pub const PREVIEW_EDGE: u32 = 2560;
 const JPEG_QUALITY: u8 = 85;
 const MAX_DECODE_BYTES: usize = 512 * 1024 * 1024;
+pub const MAX_PIXELS: u64 = 120_000_000;
 
 #[derive(Debug, Error)]
 pub enum ImagingError {
@@ -23,6 +24,10 @@ pub enum ImagingError {
     PixelFormat,
     #[error("JPEG has no image data")]
     Empty,
+    #[error("JPEG is too large to decode safely")]
+    TooLarge,
+    #[error("lossless JPEG is not supported")]
+    Lossless,
     #[error("cannot resize: {0}")]
     Resize(String),
 }
@@ -57,11 +62,28 @@ fn fit(width: u32, height: u32, edge: u32) -> (u32, u32) {
     (scaled(width), scaled(height))
 }
 
+fn check_size(info: &jpeg_decoder::ImageInfo) -> Result<(), ImagingError> {
+    let pixels = u64::from(info.width) * u64::from(info.height);
+    if pixels == 0 || pixels > MAX_PIXELS {
+        return Err(ImagingError::TooLarge);
+    }
+    match info.coding_process {
+        jpeg_decoder::CodingProcess::Lossless => Err(ImagingError::Lossless),
+        jpeg_decoder::CodingProcess::DctProgressive
+            if pixels.saturating_mul(3 * 2) > MAX_DECODE_BYTES as u64 =>
+        {
+            Err(ImagingError::TooLarge)
+        }
+        _ => Ok(()),
+    }
+}
+
 fn decode_at_least(jpeg: &[u8], edge: u32) -> Result<RgbImage, ImagingError> {
     let mut decoder = Decoder::new(Cursor::new(jpeg));
     decoder.set_max_decoding_buffer_size(MAX_DECODE_BYTES);
     decoder.read_info()?;
     let info = decoder.info().ok_or(ImagingError::Empty)?;
+    check_size(&info)?;
     let (target_w, target_h) = fit(u32::from(info.width), u32::from(info.height), edge);
     let clamp = |side: u32| u16::try_from(side).unwrap_or(u16::MAX);
     let (width, height) = decoder.scale(clamp(target_w), clamp(target_h))?;
@@ -72,7 +94,10 @@ fn decode_at_least(jpeg: &[u8], edge: u32) -> Result<RgbImage, ImagingError> {
         PixelFormat::L8 => pixels.iter().flat_map(|&v| [v, v, v]).collect(),
         PixelFormat::L16 => pixels
             .chunks_exact(2)
-            .flat_map(|pair| [pair[0], pair[0], pair[0]])
+            .flat_map(|pair| {
+                let value = (u16::from_ne_bytes([pair[0], pair[1]]) >> 8) as u8;
+                [value, value, value]
+            })
             .collect(),
         PixelFormat::CMYK32 => pixels
             .chunks_exact(4)
@@ -99,15 +124,32 @@ pub fn orient(image: DynamicImage, orientation: u16) -> DynamicImage {
     }
 }
 
-fn resize_to(image: &RgbImage, edge: u32) -> Result<RgbImage, ImagingError> {
+fn resize_to(image: RgbImage, edge: u32) -> Result<RgbImage, ImagingError> {
     let (width, height) = fit(image.width(), image.height(), edge);
     if (width, height) == image.dimensions() {
-        return Ok(image.clone());
+        return Ok(image);
     }
     let source = Image::from_vec_u8(
         image.width(),
         image.height(),
-        image.as_raw().clone(),
+        image.into_raw(),
+        PixelType::U8x3,
+    )?;
+    let mut target = Image::new(width, height, PixelType::U8x3);
+    Resizer::new().resize(
+        &source,
+        &mut target,
+        &ResizeOptions::new().resize_alg(ResizeAlg::Convolution(ResizeFilter::Bilinear)),
+    )?;
+    RgbImage::from_raw(width, height, target.into_vec()).ok_or(ImagingError::PixelFormat)
+}
+
+fn shrink(image: &RgbImage, edge: u32) -> Result<RgbImage, ImagingError> {
+    let (width, height) = fit(image.width(), image.height(), edge);
+    let source = fast_image_resize::images::ImageRef::new(
+        image.width(),
+        image.height(),
+        image.as_raw(),
         PixelType::U8x3,
     )?;
     let mut target = Image::new(width, height, PixelType::U8x3);
@@ -142,8 +184,8 @@ pub fn dhash(image: &RgbImage) -> u64 {
 pub fn render(jpeg: &[u8], orientation: u16) -> Result<Rendered, ImagingError> {
     let decoded = decode_at_least(jpeg, PREVIEW_EDGE)?;
     let upright = orient(DynamicImage::ImageRgb8(decoded), orientation).into_rgb8();
-    let preview = resize_to(&upright, PREVIEW_EDGE)?;
-    let thumb = resize_to(&preview, THUMB_EDGE)?;
+    let preview = resize_to(upright, PREVIEW_EDGE)?;
+    let thumb = shrink(&preview, THUMB_EDGE)?;
     Ok(Rendered {
         dhash: dhash(&thumb),
         thumb: encode(&thumb)?,
@@ -210,6 +252,21 @@ mod tests {
         assert_eq!(first, again);
         assert!(hamming(first, flipped) > 12);
         Ok(())
+    }
+
+    #[test]
+    fn huge_progressive_header_is_rejected_before_allocating() {
+        let mut jpeg: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x43, 0x00];
+        jpeg.extend([1u8; 64]);
+        jpeg.extend([
+            0xFF, 0xC2, 0x00, 0x11, 0x08, 0xFF, 0xFF, 0xFF, 0xFF, 0x03, 1, 0x11, 0, 2, 0x11, 0, 3,
+            0x11, 0,
+        ]);
+        jpeg.extend([
+            0xFF, 0xC4, 0x00, 0x14, 0x00, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]);
+        jpeg.extend([0xFF, 0xDA, 0x00, 0x08, 0x01, 1, 0x00, 0, 0, 0, 0xFF, 0xD9]);
+        assert!(matches!(render(&jpeg, 1), Err(ImagingError::TooLarge)));
     }
 
     #[test]

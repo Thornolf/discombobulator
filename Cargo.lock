@@ -750,6 +750,7 @@ dependencies = [
  "image",
  "jpeg-decoder",
  "kamadak-exif",
+ "libc",
  "rayon",
  "rusqlite",
  "serde",

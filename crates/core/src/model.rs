@@ -60,8 +60,6 @@ pub struct Photo {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub error: Option<String>,
-    pub quick_hash: Option<String>,
-    pub full_hash: Option<String>,
     pub decision: Decision,
 }
 

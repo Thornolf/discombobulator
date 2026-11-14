@@ -1,5 +1,5 @@
-use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -8,15 +8,18 @@ use rayon::prelude::*;
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::fsx;
 use crate::imaging;
-use crate::metadata;
+use crate::metadata::{self, CaptureInfo};
 use crate::model::{Decision, Photo};
 use crate::raf;
 use crate::scan::{self, Source};
 use crate::store::{Rendering, Store, StoreError};
 use crate::xmp;
 
-pub const MAX_JPEG_BYTES: u64 = 256 * 1024 * 1024;
+pub const MAX_JPEG_BYTES: u64 = 64 * 1024 * 1024;
+const PAIRED_RAF_XMP_SCAN: u64 = 512 * 1024;
+const MAX_WORKERS: usize = 8;
 
 #[derive(Debug, Error)]
 pub enum LibraryError {
@@ -26,6 +29,8 @@ pub enum LibraryError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error("cannot start workers: {0}")]
+    Workers(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,29 +48,47 @@ impl Variant {
     }
 }
 
+pub fn is_photo_id(id: &str) -> bool {
+    id.len() == 20
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 pub struct Cache {
     dir: PathBuf,
 }
 
 impl Cache {
     pub fn new(dir: PathBuf) -> std::io::Result<Cache> {
-        std::fs::create_dir_all(&dir)?;
+        fsx::create_private_dir(&dir)?;
         Ok(Cache { dir })
     }
 
-    pub fn path(&self, id: &str, variant: Variant) -> PathBuf {
-        let shard = id.get(..2).unwrap_or("00");
-        self.dir
-            .join(shard)
-            .join(format!("{id}.{}", variant.suffix()))
+    fn checked_path(&self, id: &str, variant: Variant) -> std::io::Result<PathBuf> {
+        if !is_photo_id(id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid photo id",
+            ));
+        }
+        Ok(self
+            .dir
+            .join(&id[..2])
+            .join(format!("{id}.{}", variant.suffix())))
+    }
+
+    pub fn has(&self, id: &str, variant: Variant) -> bool {
+        self.checked_path(id, variant)
+            .is_ok_and(|path| path.is_file())
     }
 
     pub fn write(&self, id: &str, variant: Variant, bytes: &[u8]) -> std::io::Result<()> {
-        let path = self.path(id, variant);
+        let path = self.checked_path(id, variant)?;
         let Some(parent) = path.parent() else {
             return Err(std::io::Error::other("cache path has no parent"));
         };
-        std::fs::create_dir_all(parent)?;
+        fsx::create_private_dir(parent)?;
         let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
         temporary.write_all(bytes)?;
         temporary.persist(&path).map_err(|error| error.error)?;
@@ -73,7 +96,7 @@ impl Cache {
     }
 
     pub fn read(&self, id: &str, variant: Variant) -> std::io::Result<Vec<u8>> {
-        std::fs::read(self.path(id, variant))
+        std::fs::read(self.checked_path(id, variant)?)
     }
 }
 
@@ -104,13 +127,17 @@ impl Progress {
     }
 }
 
+struct RunningGuard<'a>(&'a AtomicBool);
+
+impl Drop for RunningGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
 pub fn read_display_jpeg(photo: &Photo) -> Result<Vec<u8>, String> {
     if let Some(jpg) = &photo.jpg {
-        let mut bytes = Vec::new();
-        File::open(jpg)
-            .and_then(|file| file.take(MAX_JPEG_BYTES).read_to_end(&mut bytes))
-            .map_err(|error| error.to_string())?;
-        return Ok(bytes);
+        return fsx::read_limited(jpg, MAX_JPEG_BYTES).map_err(|error| error.to_string());
     }
     let raf = photo.raf.as_ref().ok_or("photo has no file")?;
     raf::read_embedded_jpeg(raf).map_err(|error| error.to_string())
@@ -134,8 +161,6 @@ fn photo_from_source(source: &Source) -> Photo {
         width: None,
         height: None,
         error: None,
-        quick_hash: None,
-        full_hash: None,
         decision: Decision::default(),
     }
 }
@@ -149,11 +174,18 @@ pub fn canonical_folder(path: &Path) -> Result<PathBuf, LibraryError> {
     Ok(canonical)
 }
 
+fn workers() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .clamp(1, MAX_WORKERS)
+}
+
 pub struct Library {
     root: PathBuf,
     store: Arc<Store>,
     cache: Arc<Cache>,
     progress: Arc<Progress>,
+    pool: rayon::ThreadPool,
 }
 
 impl Library {
@@ -163,11 +195,16 @@ impl Library {
         cache: Arc<Cache>,
     ) -> Result<Library, LibraryError> {
         let root = canonical_folder(root)?;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers())
+            .build()
+            .map_err(|error| LibraryError::Workers(error.to_string()))?;
         let library = Library {
             root,
             store,
             cache,
             progress: Arc::new(Progress::default()),
+            pool,
         };
         library.rescan()?;
         Ok(library)
@@ -216,62 +253,71 @@ impl Library {
             .filter(|photo| photo.dir.starts_with(&self.root)))
     }
 
+    fn needs_rendering(&self, photo: &Photo) -> bool {
+        !photo.is_processed()
+            || photo.error.is_some()
+            || !self.cache.has(&photo.id, Variant::Thumb)
+            || !self.cache.has(&photo.id, Variant::Preview)
+    }
+
     pub fn process_all(&self) -> Result<ProgressSnapshot, LibraryError> {
         let pending: Vec<Photo> = self
             .photos()?
             .into_iter()
-            .filter(|photo| !photo.is_processed() || !self.has_cached(photo))
+            .filter(|photo| self.needs_rendering(photo))
             .collect();
         self.progress.total.store(pending.len(), Ordering::Relaxed);
         self.progress.done.store(0, Ordering::Relaxed);
         self.progress.failed.store(0, Ordering::Relaxed);
         self.progress.running.store(true, Ordering::Relaxed);
-        pending.par_iter().for_each(|photo| {
-            let rendering = self.render(photo);
-            if rendering.error.is_some() {
-                self.progress.failed.fetch_add(1, Ordering::Relaxed);
-            }
-            if self.store.save_rendering(&photo.id, &rendering).is_err() {
-                self.progress.failed.fetch_add(1, Ordering::Relaxed);
-            }
-            self.progress.done.fetch_add(1, Ordering::Relaxed);
+        let _running = RunningGuard(&self.progress.running);
+        self.pool.install(|| {
+            pending.par_iter().for_each(|photo| {
+                let rendering = self.render_safely(photo);
+                let saved = self.store.save_rendering(&photo.id, &rendering).is_ok();
+                if rendering.error.is_some() || !saved {
+                    self.progress.failed.fetch_add(1, Ordering::Relaxed);
+                }
+                self.progress.done.fetch_add(1, Ordering::Relaxed);
+            });
         });
-        self.progress.running.store(false, Ordering::Relaxed);
         Ok(self.progress.snapshot())
     }
 
-    fn has_cached(&self, photo: &Photo) -> bool {
-        photo.error.is_some()
-            || (self.cache.path(&photo.id, Variant::Thumb).is_file()
-                && self.cache.path(&photo.id, Variant::Preview).is_file())
+    fn render_safely(&self, photo: &Photo) -> Rendering {
+        catch_unwind(AssertUnwindSafe(|| self.render(photo))).unwrap_or_else(|_| {
+            failed_rendering(
+                photo,
+                CaptureInfo::default(),
+                "decoder crashed on this file",
+            )
+        })
+    }
+
+    fn camera_rating(photo: &Photo, jpeg: &[u8]) -> Option<u8> {
+        xmp::rating(jpeg).or_else(|| {
+            photo.jpg.as_ref()?;
+            let raf = photo.raf.as_ref()?;
+            let head = fsx::read_limited(raf, PAIRED_RAF_XMP_SCAN).ok()?;
+            xmp::rating(&head)
+        })
     }
 
     pub fn render(&self, photo: &Photo) -> Rendering {
-        let failed = |error: String| Rendering {
-            fingerprint: photo.fingerprint.clone(),
-            capture_ms: None,
-            orientation: 1,
-            dhash: None,
-            camera_rating: None,
-            width: None,
-            height: None,
-            error: Some(error),
-        };
         let jpeg = match read_display_jpeg(photo) {
             Ok(jpeg) => jpeg,
-            Err(error) => return failed(error),
+            Err(error) => return failed_rendering(photo, CaptureInfo::default(), &error),
         };
         let info = metadata::capture_info(&jpeg);
-        let camera_rating = xmp::rating(&jpeg).or_else(|| {
-            photo
-                .raf
-                .as_ref()
-                .and_then(|raf| raf::read_head(raf, xmp::XMP_SCAN_LIMIT).ok())
-                .and_then(|head| xmp::rating(&head))
-        });
+        let camera_rating = Library::camera_rating(photo, &jpeg);
         let rendered = match imaging::render(&jpeg, info.orientation) {
             Ok(rendered) => rendered,
-            Err(error) => return failed(error.to_string()),
+            Err(error) => {
+                return Rendering {
+                    camera_rating,
+                    ..failed_rendering(photo, info, &error.to_string())
+                };
+            }
         };
         let written = self
             .cache
@@ -281,7 +327,7 @@ impl Library {
                     .write(&photo.id, Variant::Preview, &rendered.preview)
             });
         if let Err(error) = written {
-            return failed(error.to_string());
+            return failed_rendering(photo, info, &error.to_string());
         }
         Rendering {
             fingerprint: photo.fingerprint.clone(),
@@ -296,15 +342,34 @@ impl Library {
     }
 
     pub fn image(&self, id: &str, variant: Variant) -> Result<Option<Vec<u8>>, LibraryError> {
+        if !is_photo_id(id) {
+            return Ok(None);
+        }
         let Some(photo) = self.photo(id)? else {
             return Ok(None);
         };
-        if let Ok(bytes) = self.cache.read(id, variant) {
+        if photo.is_processed()
+            && photo.error.is_none()
+            && let Ok(bytes) = self.cache.read(id, variant)
+        {
             return Ok(Some(bytes));
         }
-        let rendering = self.render(&photo);
+        let rendering = self.render_safely(&photo);
         self.store.save_rendering(id, &rendering)?;
         Ok(self.cache.read(id, variant).ok())
+    }
+}
+
+fn failed_rendering(photo: &Photo, info: CaptureInfo, error: &str) -> Rendering {
+    Rendering {
+        fingerprint: photo.fingerprint.clone(),
+        capture_ms: info.capture_ms,
+        orientation: info.orientation,
+        dhash: None,
+        camera_rating: None,
+        width: None,
+        height: None,
+        error: Some(error.to_owned()),
     }
 }
 
@@ -389,16 +454,73 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_folder() {
-        let store = Store::in_memory().map(Arc::new);
-        let cache = tempfile::tempdir()
-            .and_then(|dir| Cache::new(dir.path().to_path_buf()))
-            .map(Arc::new);
-        if let (Ok(store), Ok(cache)) = (store, cache) {
-            assert!(matches!(
-                Library::open(Path::new("/definitely/not/here"), store, cache),
-                Err(LibraryError::NotAFolder(_))
-            ));
+    fn rejects_missing_folder() -> Result<(), LibraryError> {
+        let dir = tempfile::tempdir()?;
+        let store = Arc::new(Store::in_memory()?);
+        let cache = Arc::new(Cache::new(dir.path().join("cache"))?);
+        assert!(matches!(
+            Library::open(&dir.path().join("missing"), store, cache),
+            Err(LibraryError::NotAFolder(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn pair_is_displayed_from_its_jpg() -> Result<(), LibraryError> {
+        let (_dir, library) = library_with(&[
+            ("A.RAF", raf_with_jpeg(&gradient_jpeg(400, 300, 1))),
+            ("A.JPG", gradient_jpeg(200, 100, 2)),
+        ])?;
+        library.process_all()?;
+        let photo = library.photos()?.remove(0);
+        assert_eq!((photo.width, photo.height), (Some(200), Some(100)));
+        Ok(())
+    }
+
+    #[test]
+    fn changed_file_is_processed_again() -> Result<(), LibraryError> {
+        let (_dir, library) = library_with(&[("A.JPG", gradient_jpeg(100, 50, 1))])?;
+        library.process_all()?;
+        std::fs::write(library.root().join("A.JPG"), gradient_jpeg(60, 120, 2))?;
+        library.rescan()?;
+        assert_eq!(library.process_all()?.total, 1);
+        let photo = library.photos()?.remove(0);
+        assert_eq!((photo.width, photo.height), (Some(60), Some(120)));
+        Ok(())
+    }
+
+    #[test]
+    fn failed_photos_are_retried() -> Result<(), LibraryError> {
+        let (_dir, library) = library_with(&[("bad.JPG", b"not a jpeg".to_vec())])?;
+        assert_eq!(library.process_all()?.failed, 1);
+        assert_eq!(library.process_all()?.total, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn camera_rating_comes_from_embedded_xmp() -> Result<(), LibraryError> {
+        let mut jpeg = gradient_jpeg(40, 30, 1);
+        jpeg.extend_from_slice(br#"<x:xmpmeta xmp:Rating="4"></x:xmpmeta>"#);
+        let (_dir, library) = library_with(&[("A.JPG", jpeg)])?;
+        library.process_all()?;
+        assert_eq!(library.photos()?.remove(0).camera_rating, Some(4));
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_or_malformed_ids_have_no_image() -> Result<(), LibraryError> {
+        let (_dir, library) = library_with(&[("A.JPG", gradient_jpeg(40, 30, 1))])?;
+        assert_eq!(library.image("0123456789abcdef0123", Variant::Thumb)?, None);
+        assert_eq!(library.image("../../etc/passwd", Variant::Thumb)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn cache_rejects_ids_that_are_not_photo_ids() {
+        let cache = tempfile::tempdir().and_then(|dir| Cache::new(dir.path().to_path_buf()));
+        if let Ok(cache) = cache {
+            assert!(cache.write("../escape", Variant::Thumb, b"x").is_err());
+            assert!(cache.read("/etc/passwd", Variant::Thumb).is_err());
         }
     }
 }

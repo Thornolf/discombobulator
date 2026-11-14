@@ -84,6 +84,7 @@ pub fn scan(root: &Path) -> Vec<Source> {
     let mut sources: BTreeMap<(PathBuf, String), Source> = BTreeMap::new();
     let walker = WalkDir::new(root)
         .follow_links(false)
+        .sort_by_file_name()
         .into_iter()
         .filter_entry(|entry| {
             entry.depth() == 0
@@ -114,23 +115,26 @@ pub fn scan(root: &Path) -> Vec<Source> {
             modified_ms,
         };
         let stem = stem.to_string_lossy().into_owned();
-        let source = sources
-            .entry((dir.to_path_buf(), stem.to_lowercase()))
-            .or_insert_with(|| Source {
-                dir: dir.to_path_buf(),
-                stem: stem.clone(),
-                raf: None,
-                jpg: None,
-            });
-        let slot = match kind {
-            Kind::Raf => &mut source.raf,
-            Kind::Jpg => &mut source.jpg,
+        let pair_key = (dir.to_path_buf(), stem.to_lowercase());
+        let occupied = sources.get(&pair_key).is_some_and(|source| match kind {
+            Kind::Raf => source.raf.is_some(),
+            Kind::Jpg => source.jpg.is_some(),
+        });
+        let (key, stem) = if occupied {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            ((dir.to_path_buf(), name.to_lowercase()), name)
+        } else {
+            (pair_key, stem)
         };
-        if slot
-            .as_ref()
-            .is_none_or(|existing| existing.path > stamp.path)
-        {
-            *slot = Some(stamp);
+        let source = sources.entry(key).or_insert_with(|| Source {
+            dir: dir.to_path_buf(),
+            stem,
+            raf: None,
+            jpg: None,
+        });
+        match kind {
+            Kind::Raf => source.raf = Some(stamp),
+            Kind::Jpg => source.jpg = Some(stamp),
         }
     }
     sources.into_values().collect()
@@ -177,6 +181,19 @@ mod tests {
                 ("DSCF0004".into(), false, true),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn second_file_with_the_same_stem_becomes_its_own_photo() -> std::io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        touch(&dir.path().join("A.jpg"))?;
+        touch(&dir.path().join("A.jpeg"))?;
+        touch(&dir.path().join("A.RAF"))?;
+        let sources = scan(dir.path());
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources.iter().filter(|s| s.raf.is_some()).count(), 1);
+        assert_eq!(sources.iter().filter(|s| s.jpg.is_some()).count(), 2);
         Ok(())
     }
 
