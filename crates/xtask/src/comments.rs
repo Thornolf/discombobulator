@@ -50,19 +50,20 @@ fn raw_string_end(text: &[u8], start: usize) -> Option<usize> {
     Some(find(text, &closing, index + 1).map_or(text.len(), |end| end + closing.len()))
 }
 
-fn char_literal_end(text: &[u8], start: usize) -> Option<usize> {
+fn char_literal_end(source: &str, start: usize) -> Option<usize> {
+    let text = source.as_bytes();
     let rest = text.get(start + 1..)?;
     match rest.first()? {
         b'\\' => {
-            let close = rest.iter().skip(1).position(|&byte| byte == b'\'')?;
-            (close <= 10).then_some(start + close + 3)
+            let close = rest.get(2..)?.iter().position(|&byte| byte == b'\'')?;
+            (close <= 8).then_some(start + close + 4)
         }
         b'\'' => None,
         _ => {
-            let width = std::str::from_utf8(&rest[..rest.len().min(4)])
-                .ok()
-                .or_else(|| std::str::from_utf8(&rest[..1]).ok())
-                .and_then(|text| text.chars().next())
+            let width = source
+                .get(start + 1..)?
+                .chars()
+                .next()
                 .map_or(1, char::len_utf8);
             (rest.get(width) == Some(&b'\'')).then_some(start + width + 2)
         }
@@ -98,7 +99,7 @@ pub fn rust(source: &str) -> Vec<usize> {
                 }
                 index += 1;
             }
-            b'\'' => index = char_literal_end(text, index).unwrap_or(index + 1),
+            b'\'' => index = char_literal_end(source, index).unwrap_or(index + 1),
             _ => index += 1,
         }
     }
@@ -162,6 +163,13 @@ mod tests {
             rust("#![cfg_attr(test, allow(dead_code))]\n"),
             Vec::<usize>::new()
         );
+    }
+
+    #[test]
+    fn escaped_quote_char_does_not_hide_later_comments() {
+        assert_eq!(rust("let a = ['\\'','\"']; let s = 1;\n// c2\n"), vec![2]);
+        assert_eq!(rust("let e = '\\u{10FFFF}'; // c\n"), vec![1]);
+        assert_eq!(rust("let c = '中'; // c\n"), vec![1]);
     }
 
     #[test]
