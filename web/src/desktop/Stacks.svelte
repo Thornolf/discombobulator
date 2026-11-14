@@ -73,6 +73,8 @@
     if (sceneIndex >= scenes.length && scenes.length) sceneIndex = scenes.length - 1;
     const stacks = scenes[sceneIndex]?.stacks.length ?? 0;
     if (stackIndex >= stacks && stacks) stackIndex = stacks - 1;
+    const frames = scenes[sceneIndex]?.stacks[stackIndex]?.length ?? 0;
+    if (frameIndex >= frames && frames) frameIndex = frames - 1;
   });
 
   $effect(() => {
@@ -83,8 +85,13 @@
     }
   });
 
+  let offeredOpen = false;
+
   $effect(() => {
-    if (store.server && !store.server.root && dialog === null) dialog = "open";
+    if (!offeredOpen && store.server && !store.server.root && dialog === null) {
+      offeredOpen = true;
+      dialog = "open";
+    }
   });
 
   function neighbour(direction: 1 | -1): Stack | null {

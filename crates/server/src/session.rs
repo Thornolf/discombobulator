@@ -104,7 +104,7 @@ fn start_processing(
     let version = Arc::clone(version);
     tokio::task::spawn_blocking(move || {
         loop {
-            while processing.again.swap(false, Ordering::AcqRel) {
+            while processing.again.swap(false, Ordering::AcqRel) && !library.is_cancelled() {
                 let _ = library.process_all();
                 version.fetch_add(1, Ordering::Relaxed);
             }
@@ -121,6 +121,7 @@ fn start_processing(
 impl Drop for Session {
     fn drop(&mut self) {
         self.closed.store(true, Ordering::Relaxed);
+        self.library.cancel();
     }
 }
 

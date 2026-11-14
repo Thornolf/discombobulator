@@ -190,6 +190,7 @@ pub struct Library {
     cache: Arc<Cache>,
     progress: Arc<Progress>,
     pool: rayon::ThreadPool,
+    cancelled: AtomicBool,
 }
 
 impl Library {
@@ -209,6 +210,7 @@ impl Library {
             cache,
             progress: Arc::new(Progress::default()),
             pool,
+            cancelled: AtomicBool::new(false),
         };
         library.rescan()?;
         Ok(library)
@@ -283,6 +285,9 @@ impl Library {
         let _running = RunningGuard(&self.progress.running);
         self.pool.install(|| {
             pending.par_iter().for_each(|photo| {
+                if self.cancelled.load(Ordering::Relaxed) {
+                    return;
+                }
                 let rendering = self.render_safely(photo);
                 let saved = self.store.save_rendering(&photo.id, &rendering).is_ok();
                 if rendering.error.is_some() || !saved {
@@ -292,6 +297,14 @@ impl Library {
             });
         });
         Ok(self.progress.snapshot())
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
     }
 
     fn render_safely(&self, photo: &Photo) -> Rendering {
@@ -496,6 +509,14 @@ mod tests {
         std::fs::rename(&moved, library.root())?;
         library.rescan()?;
         assert_eq!(library.photo(&id)?.map(|p| p.decision), Some(delete));
+        Ok(())
+    }
+
+    #[test]
+    fn cancelled_library_stops_processing() -> Result<(), LibraryError> {
+        let (_dir, library) = library_with(&[("A.JPG", gradient_jpeg(40, 30, 1))])?;
+        library.cancel();
+        assert_eq!(library.process_all()?.done, 0);
         Ok(())
     }
 

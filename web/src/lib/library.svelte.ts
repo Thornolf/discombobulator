@@ -1,4 +1,4 @@
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import { sameDecision } from "./decisions";
 import type { Decision, DecisionChange, Photo, ServerState } from "./types";
 
@@ -38,6 +38,8 @@ export class LibraryStore {
   #pending = loadPending();
   #version = -1;
   #flushing = false;
+  #edits = 0;
+  #editedAt = new Map<string, number>();
   #timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
@@ -82,12 +84,16 @@ export class LibraryStore {
       return;
     }
     this.loading = true;
+    const startedAt = this.#edits;
     try {
       const photos = await api.photos();
       for (const photo of photos) {
         const pending = this.#pending.get(photo.id);
+        const local = this.#byId.get(photo.id);
         if (pending) {
           photo.decision = pending;
+        } else if (local && (this.#editedAt.get(photo.id) ?? -1) >= startedAt) {
+          photo.decision = { ...local.decision };
         }
       }
       this.setPhotos(photos);
@@ -103,6 +109,7 @@ export class LibraryStore {
   }
 
   async open(path: string): Promise<void> {
+    await this.flush();
     this.server = await api.open(path);
     this.#version = this.server.version;
     this.#undo = [];
@@ -134,7 +141,9 @@ export class LibraryStore {
         photo.decision = change.decision;
       }
       this.#pending.set(change.id, change.decision);
+      this.#editedAt.set(change.id, this.#edits);
     }
+    this.#edits += 1;
     savePending(this.#pending);
     this.pendingCount = this.#pending.size;
     void this.flush();
@@ -159,24 +168,38 @@ export class LibraryStore {
       return;
     }
     this.#flushing = true;
+    let again = false;
     try {
       const result = await api.decide(changes);
       for (const id of result.missing) {
         this.#pending.delete(id);
       }
-      for (const [id, decision] of snapshot) {
-        const current = this.#pending.get(id);
-        if (current && sameDecision(current, decision)) {
-          this.#pending.delete(id);
-        }
-      }
-      savePending(this.#pending);
-      this.pendingCount = this.#pending.size;
+      this.#settle(snapshot);
       this.online = true;
-    } catch {
-      this.online = false;
+      again = this.#pending.size > 0;
+    } catch (error) {
+      if (error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 409) {
+        this.#settle(snapshot);
+        this.error = `Some marks were rejected: ${error.message}`;
+      } else {
+        this.online = false;
+      }
     } finally {
       this.#flushing = false;
     }
+    if (again) {
+      await this.flush();
+    }
+  }
+
+  #settle(snapshot: Map<string, Decision>): void {
+    for (const [id, decision] of snapshot) {
+      const current = this.#pending.get(id);
+      if (current && sameDecision(current, decision)) {
+        this.#pending.delete(id);
+      }
+    }
+    savePending(this.#pending);
+    this.pendingCount = this.#pending.size;
   }
 }
