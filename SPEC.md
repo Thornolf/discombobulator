@@ -175,7 +175,9 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
 - Requests whose `Host` is not `localhost`, `127.0.0.1` or a `*.ts.net` name are rejected (DNS
   rebinding).
 - State-changing requests need the `X-Discombobulator: 1` header and, when an `Origin` is sent, an
-  origin matching the host (blocks cross-site requests from web pages).
+  origin matching the `Host` header or the PC's own tailnet machine name (blocks cross-site requests
+  from web pages). `X-Forwarded-Host` is only checked against the host allowlist, never trusted to
+  vouch for an origin.
 - Photo ids are opaque; the API never takes a file path except to open a folder, and that path must be
   an existing directory.
 - The app never deletes a user file and never follows symlinks when moving.

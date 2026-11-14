@@ -68,7 +68,6 @@ pub fn check(
     if let Some(origin) = header_text(headers, ORIGIN) {
         let authority = origin_authority(origin).ok_or(StatusCode::FORBIDDEN)?;
         let same_host = authority.eq_ignore_ascii_case(host)
-            || forwarded.is_some_and(|value| authority.eq_ignore_ascii_case(value))
             || (origin.starts_with("https://")
                 && tailnet_host.is_some_and(|name| authority.eq_ignore_ascii_case(name)));
         if !same_host {
@@ -295,7 +294,30 @@ mod tests {
     }
 
     #[test]
-    fn tailnet_origin_matches_forwarded_host() {
+    fn forwarded_host_alone_does_not_vouch_for_the_origin() {
+        let headers = headers(&[
+            ("host", "127.0.0.1:47820"),
+            ("x-forwarded-host", "evil.tail1234.ts.net"),
+            (CSRF_HEADER, "1"),
+            ("origin", "https://evil.tail1234.ts.net"),
+        ]);
+        assert_eq!(
+            check(&Method::POST, "/api/library", &headers, None),
+            Err(StatusCode::FORBIDDEN)
+        );
+        assert_eq!(
+            check(
+                &Method::POST,
+                "/api/library",
+                &headers,
+                Some("desk.tail1234.ts.net")
+            ),
+            Err(StatusCode::FORBIDDEN)
+        );
+    }
+
+    #[test]
+    fn tailnet_origin_with_forwarded_host_matches_the_machine_name() {
         assert_eq!(
             check(
                 &Method::POST,
@@ -306,7 +328,7 @@ mod tests {
                     (CSRF_HEADER, "1"),
                     ("origin", "https://desk.tail1234.ts.net")
                 ]),
-                None
+                Some("desk.tail1234.ts.net")
             ),
             Ok(())
         );
