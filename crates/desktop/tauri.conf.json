@@ -40,7 +40,7 @@
     "category": "Photography",
     "shortDescription": "Fast, keyboard-first photo culling for Fujifilm RAF + JPG",
     "longDescription": "Cull Fujifilm RAF + JPG photos with one key per decision, hand picks to Lightroom through XMP sidecars, and swipe through them on an iPhone over Tailscale.",
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": false
   },
   "plugins": {
     "updater": {

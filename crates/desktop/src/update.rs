@@ -8,6 +8,7 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 const FIRST_CHECK_AFTER: Duration = Duration::from_secs(20);
 const CHECK_EVERY: Duration = Duration::from_secs(12 * 60 * 60);
 const NOTES_LIMIT: usize = 1_500;
+const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
 static BUSY: AtomicBool = AtomicBool::new(false);
 
@@ -30,7 +31,7 @@ async fn check(app: &AppHandle, asked: bool) {
     if BUSY.swap(true, Ordering::SeqCst) {
         return;
     }
-    let found = match app.updater() {
+    let found = match app.updater_builder().timeout(CHECK_TIMEOUT).build() {
         Ok(updater) => updater.check().await,
         Err(error) => Err(error),
     };

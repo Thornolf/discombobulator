@@ -215,9 +215,9 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
   in passive mode and restarts the app; the library and settings are kept.
 - Updates are signed with a minisign key whose public half is in `tauri.conf.json`; an installer whose
   signature does not verify, or whose signed version differs from the announced one, is refused
-  (`requireSignedVersion`). The release workflow signs with the `TAURI_SIGNING_PRIVATE_KEY` secret and
-  publishes `latest.json`; without the secret it still releases the installer, but installed apps are
-  not offered it.
+  (`requireSignedVersion`). The release workflow builds without the key, then signs the installer in a
+  separate step that alone sees the `TAURI_SIGNING_PRIVATE_KEY` secret, and publishes `latest.json`;
+  without the secret it still releases the installer, but installed apps are not offered it.
 
 ## Prior art
 
