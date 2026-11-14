@@ -5,6 +5,8 @@ import type {
   DuplicateGroup,
   FolderListing,
   PhoneStatus,
+  RecyclePlan,
+  RecycleReport,
   Photo,
   ServerState,
 } from "./types";
@@ -44,6 +46,9 @@ export const api = {
   duplicates: (tolerance: number) => request<DuplicateGroup[]>(`/api/duplicates?tolerance=${tolerance}`),
   phone: () => request<PhoneStatus>("/api/phone"),
   enablePhone: () => request<PhoneStatus>("/api/phone", { method: "POST" }),
+  recyclePlan: () => request<RecyclePlan>("/api/recycle"),
+  recycle: (confirmed: RecyclePlan) =>
+    request<RecycleReport>("/api/recycle", { method: "POST", body: JSON.stringify(confirmed) }),
   applyPlan: () => request<ApplyPlan>("/api/apply"),
   apply: () => request<ApplyReport>("/api/apply", { method: "POST" }),
   decide: (changes: DecisionChange[]) =>

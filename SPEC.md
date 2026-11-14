@@ -89,6 +89,14 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
 - Refuses symlinks and any path that resolves outside the opened root.
 - Reports what moved and what failed; a failure on one photo does not stop the others.
 
+### Empty _to_delete
+
+- After checking `_to_delete`, the user can send its files to the operating system's Recycle Bin
+  (Trash on macOS/Linux) from the Apply dialog, after a confirmation showing the file count and size.
+- Only regular files inside `_to_delete` folders under the open folder; links are never followed.
+- Files go to the Recycle Bin, never erased; a failure is reported per file and never falls back to a
+  permanent delete.
+
 ## Grouping
 
 - Photos sorted by capture time, then path.

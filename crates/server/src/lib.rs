@@ -84,6 +84,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/decisions", post(api::decisions))
         .route("/api/apply", get(api::apply_plan).post(api::apply))
         .route("/api/duplicates", get(api::duplicates))
+        .route("/api/recycle", get(api::recycle_plan).post(api::recycle))
         .route("/api/phone", get(api::phone_status).post(api::phone_enable))
         .fallback(assets::serve)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))

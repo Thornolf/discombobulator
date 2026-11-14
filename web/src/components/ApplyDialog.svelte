@@ -2,6 +2,7 @@
   import { api } from "../lib/api";
   import type { ApplyPlan, ApplyReport } from "../lib/types";
   import Modal from "./Modal.svelte";
+  import RecycleSection from "./RecycleSection.svelte";
 
   let {
     pending,
@@ -73,7 +74,10 @@
           RAF + JPG together) to a <code>_to_delete</code> folder next to them
         </li>
       </ul>
-      <p class="note">Nothing is erased. Empty <code>_to_delete</code> yourself once you have checked it.</p>
+      <p class="note">
+        Nothing is erased. Once you have checked <code>_to_delete</code>, you can send it to the Recycle Bin
+        below.
+      </p>
     {:else if !error}
       <p>Counting…</p>
     {/if}
@@ -91,6 +95,7 @@
       </button>
     </footer>
   {/if}
+  <RecycleSection generation={report ? 1 : 0} />
 </Modal>
 
 <style>

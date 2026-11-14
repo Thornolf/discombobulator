@@ -248,3 +248,32 @@ async fn reports_exact_duplicates() -> TestResult {
     assert_eq!(groups[0]["ids"].as_array().map(Vec::len), Some(2));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plans_emptying_the_trash_folder() -> TestResult {
+    let fixture = fixture()?;
+    open_and_wait(&fixture).await?;
+    std::fs::create_dir_all(fixture.photos.join("_to_delete"))?;
+    std::fs::write(fixture.photos.join("_to_delete").join("OLD.JPG"), b"1234")?;
+    let (status, plan) = send(&fixture.state, request("GET", "/api/recycle", None)?).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(plan, json!({ "files": 1, "bytes": 4 }));
+    let stale = json!({ "files": 2, "bytes": 9 });
+    let (status, _) = send(
+        &fixture.state,
+        request("POST", "/api/recycle", Some(stale))?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(fixture.photos.join("_to_delete").join("OLD.JPG").is_file());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recycling_needs_an_open_folder() -> TestResult {
+    let fixture = fixture()?;
+    let body = json!({ "files": 0, "bytes": 0 });
+    let (status, _) = send(&fixture.state, request("POST", "/api/recycle", Some(body))?).await?;
+    assert_eq!(status, StatusCode::CONFLICT);
+    Ok(())
+}
