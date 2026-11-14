@@ -18,12 +18,15 @@ mod windows {
     use windows_sys::Win32::Storage::FileSystem::{
         GetDriveTypeW, GetVolumeNameForVolumeMountPointW, GetVolumePathNameW,
     };
-    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW,
+    };
 
     use super::FALLBACK_MAX_FILE_BYTES;
 
     const DRIVE_FIXED: u32 = 3;
     const BIT_BUCKET: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket";
+    const EXPLORER_POLICIES: &str = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer";
 
     fn wide(text: &OsStr) -> Vec<u16> {
         text.encode_wide().chain(std::iter::once(0)).collect()
@@ -66,13 +69,17 @@ mod windows {
     }
 
     fn dword(key: &str, value: &str) -> Option<u32> {
+        dword_in(HKEY_CURRENT_USER, key, value)
+    }
+
+    fn dword_in(hive: HKEY, key: &str, value: &str) -> Option<u32> {
         let key = wide(OsStr::new(key));
         let value = wide(OsStr::new(value));
         let mut data = 0u32;
         let mut size = std::mem::size_of::<u32>() as u32;
         let status = unsafe {
             RegGetValueW(
-                HKEY_CURRENT_USER,
+                hive,
                 key.as_ptr(),
                 value.as_ptr(),
                 RRF_RT_REG_DWORD,
@@ -91,7 +98,13 @@ mod windows {
         }
         let guid = volume_guid(&volume).ok_or("cannot identify this drive")?;
         let key = format!(r"{BIT_BUCKET}\Volume\{guid}");
-        if dword(&key, "NukeOnDelete") == Some(1) || dword(BIT_BUCKET, "NukeOnDelete") == Some(1) {
+        let policy_off = [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE]
+            .into_iter()
+            .any(|hive| dword_in(hive, EXPLORER_POLICIES, "NoRecycleFiles") == Some(1));
+        if policy_off
+            || dword(&key, "NukeOnDelete") == Some(1)
+            || dword(BIT_BUCKET, "NukeOnDelete") == Some(1)
+        {
             return Err("the Recycle Bin is turned off for this drive".into());
         }
         Ok(dword(&key, "MaxCapacity")

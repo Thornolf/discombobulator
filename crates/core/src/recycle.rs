@@ -69,7 +69,7 @@ pub fn plan(root: &Path) -> RecyclePlan {
     }
 }
 
-fn checked_path(root: &Path, file: &Path) -> Result<PathBuf, String> {
+fn checked_path(root: &Path, file: &Path) -> Result<(PathBuf, u64), String> {
     let name = file.file_name().ok_or("has no name")?;
     let parent = file
         .parent()
@@ -94,7 +94,7 @@ fn checked_path(root: &Path, file: &Path) -> Result<PathBuf, String> {
     if !metadata.file_type().is_file() {
         return Err("not a regular file".into());
     }
-    Ok(resolved)
+    Ok((resolved, metadata.len()))
 }
 
 pub fn recycle_with<F>(root: &Path, mut send: F) -> RecycleReport
@@ -102,13 +102,15 @@ where
     F: FnMut(&Path, u64) -> Result<(), String>,
 {
     let mut report = RecycleReport::default();
-    for (file, size) in pending_files(root) {
+    for (file, _) in pending_files(root) {
         let name = file
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        match checked_path(root, &file).and_then(|resolved| send(&resolved, size)) {
-            Ok(()) => {
+        let sent = checked_path(root, &file)
+            .and_then(|(resolved, size)| send(&resolved, size).map(|()| size));
+        match sent {
+            Ok(size) => {
                 report.recycled += 1;
                 report.bytes += size;
             }
@@ -119,7 +121,17 @@ where
 }
 
 pub fn recycle(root: &Path) -> RecycleReport {
-    let limit = recycle_bin::max_file_bytes(root);
+    let total = plan(root).bytes;
+    let limit = recycle_bin::max_file_bytes(root).and_then(|limit| {
+        if total > limit {
+            Err(format!(
+                "the batch is larger than the Recycle Bin ({} MB), so it was kept; empty the Recycle Bin or send smaller folders",
+                limit / 1_048_576
+            ))
+        } else {
+            Ok(limit)
+        }
+    });
     recycle_with(root, |file, size| {
         let limit = limit.clone()?;
         if size > limit {
