@@ -38,6 +38,8 @@ export interface ServerState {
   progress: Progress | null;
   can_open_folders: boolean;
   decisions_seq: number;
+  app_version?: string;
+  can_check_updates?: boolean;
 }
 
 export interface DecisionChanges {

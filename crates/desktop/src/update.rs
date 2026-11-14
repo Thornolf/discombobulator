@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tauri::AppHandle;
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder, MessageDialogButtons};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 const FIRST_CHECK_AFTER: Duration = Duration::from_secs(20);
@@ -51,8 +51,7 @@ async fn offer(app: &AppHandle, update: Update) {
         update.version, update.current_version
     );
     let (answer, answered) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .message(text)
+    dialog(app, text)
         .title("Update available")
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Install and restart".into(),
@@ -70,11 +69,16 @@ async fn offer(app: &AppHandle, update: Update) {
     }
 }
 
+fn dialog(app: &AppHandle, text: impl Into<String>) -> MessageDialogBuilder<tauri::Wry> {
+    let builder = app.dialog().message(text);
+    match app.get_webview_window(crate::MAIN_WINDOW) {
+        Some(window) => builder.parent(&window),
+        None => builder,
+    }
+}
+
 fn tell(app: &AppHandle, text: &str) {
-    app.dialog()
-        .message(text)
-        .title("Discombobulator")
-        .show(|_| {});
+    dialog(app, text).title("Discombobulator").show(|_| {});
 }
 
 fn without_links(line: &str) -> String {

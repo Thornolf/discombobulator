@@ -29,7 +29,10 @@ pub struct AppState {
     pub port: u16,
     pub tailnet_host: RwLock<Option<String>>,
     pub tailnet_lookup: std::sync::Mutex<Option<std::time::Instant>>,
+    pub update_check: std::sync::OnceLock<UpdateCheck>,
 }
+
+pub type UpdateCheck = Box<dyn Fn() + Send + Sync>;
 
 pub struct ExactCache {
     pub root: PathBuf,
@@ -53,6 +56,7 @@ impl AppState {
             port,
             tailnet_host: RwLock::new(None),
             tailnet_lookup: std::sync::Mutex::new(None),
+            update_check: std::sync::OnceLock::new(),
         }))
     }
 
@@ -103,6 +107,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/duplicates", get(api::duplicates))
         .route("/api/recycle", get(api::recycle_plan).post(api::recycle))
         .route("/api/phone", get(api::phone_status).post(api::phone_enable))
+        .route("/api/update", post(api::check_for_updates))
         .fallback(assets::serve)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn_with_state(

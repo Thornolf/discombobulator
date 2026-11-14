@@ -4,7 +4,7 @@
   import FolderPicker from "../components/FolderPicker.svelte";
   import PhoneDialog from "../components/PhoneDialog.svelte";
   import Help from "../components/Help.svelte";
-  import { previewUrl } from "../lib/api";
+  import { api, previewUrl } from "../lib/api";
   import { keepPlan, withFavorite, withMark, withRating, type MarkAction } from "../lib/decisions";
   import { groupScenes, type Scene, type Stack } from "../lib/grouping";
   import { actionFor, loadKeymap, saveKeymap, type Action, type Keymap } from "../lib/keymap";
@@ -171,6 +171,15 @@
     moveStack(1);
   }
 
+  function checkForUpdates() {
+    notify("Checking for updates…");
+    api
+      .checkForUpdates()
+      .catch((error: unknown) =>
+        notify(error instanceof Error ? error.message : "Could not check for updates"),
+      );
+  }
+
   function nextUndecided() {
     const target = cursorMoves.nextUndecided(scenes, cursor);
     if (target) goTo(target.scene, target.stack);
@@ -271,6 +280,15 @@
     >
     <button onclick={() => (dialog = "apply")} disabled={!store.server?.root}>Apply <kbd>E</kbd></button>
     <button onclick={() => (dialog = "help")} aria-label="Keyboard shortcuts">?</button>
+    {#if store.server?.app_version}
+      {#if store.server.can_check_updates}
+        <button class="version" onclick={checkForUpdates} title="Check for updates"
+          >v{store.server.app_version} · Updates</button
+        >
+      {:else}
+        <span class="version">v{store.server.app_version}</span>
+      {/if}
+    {/if}
   </header>
   {#if progress?.running}
     <div
@@ -401,6 +419,10 @@
     padding: 9px 14px;
     border-bottom: 1px solid var(--line);
     background: var(--panel);
+  }
+  .version {
+    font: 11px var(--f-mono);
+    color: var(--mut);
   }
   .logo {
     font-weight: 700;
