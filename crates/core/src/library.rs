@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -208,6 +209,26 @@ pub struct Library {
     pool: rayon::ThreadPool,
     cancelled: AtomicBool,
     scan_failures: Mutex<ScanFailures>,
+    in_flight: Mutex<HashSet<String>>,
+    render_done: Condvar,
+    #[cfg(test)]
+    on_demand_renders: AtomicUsize,
+}
+
+struct InFlight<'a> {
+    library: &'a Library,
+    id: String,
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.library
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.id);
+        self.library.render_done.notify_all();
+    }
 }
 
 impl Library {
@@ -229,6 +250,10 @@ impl Library {
             pool,
             cancelled: AtomicBool::new(false),
             scan_failures: Mutex::new(ScanFailures::default()),
+            in_flight: Mutex::new(HashSet::new()),
+            render_done: Condvar::new(),
+            #[cfg(test)]
+            on_demand_renders: AtomicUsize::new(0),
         };
         library.rescan()?;
         Ok(library)
@@ -398,17 +423,49 @@ impl Library {
         let Some(photo) = self.photo(id)? else {
             return Ok(None);
         };
-        if photo.is_processed() {
-            if photo.error.is_some() {
-                return Ok(None);
-            }
-            if let Ok(bytes) = self.cache.read(id, variant) {
-                return Ok(Some(bytes));
-            }
+        if let Some(served) = self.cached_image(&photo, variant) {
+            return Ok(served);
         }
-        let rendering = self.render_safely(&photo);
+        let _claim = self.claim(id);
+        let Some(photo) = self.photo(id)? else {
+            return Ok(None);
+        };
+        if let Some(served) = self.cached_image(&photo, variant) {
+            return Ok(served);
+        }
+        #[cfg(test)]
+        self.on_demand_renders.fetch_add(1, Ordering::Relaxed);
+        let rendering = self.pool.install(|| self.render_safely(&photo));
         self.store.save_rendering(id, &rendering)?;
         Ok(self.cache.read(id, variant).ok())
+    }
+
+    fn cached_image(&self, photo: &Photo, variant: Variant) -> Option<Option<Vec<u8>>> {
+        if !photo.is_processed() {
+            return None;
+        }
+        if photo.error.is_some() {
+            return Some(None);
+        }
+        self.cache.read(&photo.id, variant).ok().map(Some)
+    }
+
+    fn claim(&self, id: &str) -> InFlight<'_> {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        while in_flight.contains(id) {
+            in_flight = self
+                .render_done
+                .wait(in_flight)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        in_flight.insert(id.to_owned());
+        InFlight {
+            library: self,
+            id: id.to_owned(),
+        }
     }
 }
 
@@ -583,6 +640,25 @@ mod tests {
         let (_dir, library) = library_with(&[("A.JPG", jpeg)])?;
         library.process_all()?;
         assert_eq!(library.photos()?.remove(0).camera_rating, Some(4));
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_requests_for_one_image_render_it_once() -> Result<(), LibraryError> {
+        let (_dir, library) = library_with(&[("A.JPG", gradient_jpeg(1200, 900, 1))])?;
+        let id = library.photos()?.remove(0).id;
+        let results: Vec<Option<Vec<u8>>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..6)
+                .map(|_| scope.spawn(|| library.image(&id, Variant::Thumb)))
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|handle| handle.join().ok())
+                .collect::<Result<_, _>>()
+        })?;
+        assert_eq!(results.len(), 6);
+        assert!(results.iter().all(|bytes| bytes.is_some()));
+        assert_eq!(library.on_demand_renders.load(Ordering::Relaxed), 1);
         Ok(())
     }
 
