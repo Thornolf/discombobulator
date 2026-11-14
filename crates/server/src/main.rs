@@ -44,7 +44,7 @@ async fn run_server(
     let data_dir = data_dir
         .or_else(default_data_dir)
         .ok_or("no local data folder for this user")?;
-    let state = AppState::open(&data_dir)?;
+    let state = AppState::open(&data_dir, port)?;
     let opener = std::sync::Arc::clone(&state);
     tokio::task::spawn_blocking(move || {
         let runtime = tokio::runtime::Handle::current();
@@ -57,6 +57,7 @@ async fn run_server(
             }
             None => opener.reopen_last_folder(),
         }
+        opener.refresh_tailnet_host();
     })
     .await?;
     let address = local_address(port);

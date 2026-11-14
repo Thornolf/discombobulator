@@ -4,6 +4,7 @@ import type {
   DecisionChange,
   DuplicateGroup,
   FolderListing,
+  PhoneStatus,
   Photo,
   ServerState,
 } from "./types";
@@ -41,6 +42,8 @@ export const api = {
     request<ServerState>("/api/library", { method: "POST", body: JSON.stringify({ path }) }),
   photos: () => request<Photo[]>("/api/photos"),
   duplicates: (tolerance: number) => request<DuplicateGroup[]>(`/api/duplicates?tolerance=${tolerance}`),
+  phone: () => request<PhoneStatus>("/api/phone"),
+  enablePhone: () => request<PhoneStatus>("/api/phone", { method: "POST" }),
   applyPlan: () => request<ApplyPlan>("/api/apply"),
   apply: () => request<ApplyReport>("/api/apply", { method: "POST" }),
   decide: (changes: DecisionChange[]) =>

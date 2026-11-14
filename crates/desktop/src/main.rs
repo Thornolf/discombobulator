@@ -40,6 +40,7 @@ fn start_server(state: Arc<AppState>) -> Result<(), AnyError> {
             let runtime = tokio::runtime::Handle::current();
             let _guard = runtime.enter();
             opener.reopen_last_folder();
+            opener.refresh_tailnet_host();
         })
         .await;
         if let Ok(listener) = tokio::net::TcpListener::from_std(listener) {
@@ -115,7 +116,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 fn main() {
     let data_dir = discombobulator_server::default_data_dir()
         .unwrap_or_else(|| std::env::temp_dir().join("discombobulator"));
-    let state = match AppState::open(&data_dir) {
+    let state = match AppState::open(&data_dir, DEFAULT_PORT) {
         Ok(state) => state,
         Err(error) => {
             eprintln!("cannot open the photo index: {error}");

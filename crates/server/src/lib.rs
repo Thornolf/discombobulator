@@ -2,6 +2,7 @@ pub mod api;
 pub mod assets;
 pub mod folders;
 pub mod guard;
+pub mod phone;
 pub mod session;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -25,6 +26,8 @@ pub struct AppState {
     pub version: Arc<AtomicU64>,
     pub apply_lock: std::sync::Mutex<()>,
     pub exact_duplicates: std::sync::Mutex<Option<ExactCache>>,
+    pub port: u16,
+    pub tailnet_host: RwLock<Option<String>>,
 }
 
 pub struct ExactCache {
@@ -36,6 +39,7 @@ pub struct ExactCache {
 impl AppState {
     pub fn open(
         data_dir: &std::path::Path,
+        port: u16,
     ) -> Result<Arc<AppState>, Box<dyn std::error::Error + Send + Sync>> {
         discombobulator_core::fsx::create_private_dir(data_dir)?;
         Ok(Arc::new(AppState {
@@ -45,7 +49,16 @@ impl AppState {
             version: Arc::new(AtomicU64::new(1)),
             apply_lock: std::sync::Mutex::new(()),
             exact_duplicates: std::sync::Mutex::new(None),
+            port,
+            tailnet_host: RwLock::new(None),
         }))
+    }
+
+    pub fn refresh_tailnet_host(&self) {
+        let name = phone::machine_name();
+        if let Ok(mut current) = self.tailnet_host.write() {
+            *current = name;
+        }
     }
 
     pub fn reopen_last_folder(&self) {
@@ -66,9 +79,13 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/decisions", post(api::decisions))
         .route("/api/apply", get(api::apply_plan).post(api::apply))
         .route("/api/duplicates", get(api::duplicates))
+        .route("/api/phone", get(api::phone_status).post(api::phone_enable))
         .fallback(assets::serve)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .layer(axum::middleware::from_fn(guard::middleware))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            guard::middleware,
+        ))
         .with_state(state)
 }
 

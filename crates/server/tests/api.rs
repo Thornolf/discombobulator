@@ -33,7 +33,7 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&photos)?;
     std::fs::write(photos.join("DSCF0001.JPG"), jpeg())?;
     std::fs::write(photos.join("DSCF0002.JPG"), jpeg())?;
-    let state = AppState::open(&dir.path().join("data")).map_err(|e| e.to_string())?;
+    let state = AppState::open(&dir.path().join("data"), 47820).map_err(|e| e.to_string())?;
     Ok(Fixture {
         _dir: dir,
         photos,

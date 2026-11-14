@@ -73,13 +73,16 @@ export class LibraryStore {
     } catch (error) {
       this.online = false;
       this.error = error instanceof Error ? error.message : String(error);
+      if (!this.photos.length) {
+        await this.refresh(true).catch(() => undefined);
+      }
     }
     const delay = this.server?.processing ? 1_000 : 4_000;
     this.#timer = setTimeout(() => void this.poll(), delay);
   }
 
-  async refresh(): Promise<void> {
-    if (!this.server?.root) {
+  async refresh(offline = false): Promise<void> {
+    if (!offline && !this.server?.root) {
       this.setPhotos([]);
       return;
     }
