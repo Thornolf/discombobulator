@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { actionFor, bindingFor, defaultKeymap, describe as describeBinding, rebind } from "./keymap";
+import {
+  actionFor,
+  bindingFor,
+  changedFromDefault,
+  defaultKeymap,
+  describe as describeBinding,
+  rebind,
+  restoreKeymap,
+} from "./keymap";
 
 const key = (key: string, code: string, extra: Partial<{ ctrlKey: boolean; altKey: boolean }> = {}) => ({
   key,
@@ -22,6 +30,23 @@ describe("keymap", () => {
     expect(actionFor(defaultKeymap, key("é", "Digit2"))).toBe("rate2");
     expect(actionFor(defaultKeymap, key("5", "Numpad5"))).toBe("rate5");
     expect(actionFor(defaultKeymap, key("à", "Digit0"))).toBe("rate0");
+  });
+
+  it("stores only changed actions so new default keys reach remapped keymaps", () => {
+    const remapped = rebind(defaultKeymap, "approve", { key: "q" });
+    const stored = changedFromDefault(remapped);
+    expect(Object.keys(stored)).toEqual(["approve"]);
+    expect(restoreKeymap(stored).sceneNext).toEqual(defaultKeymap.sceneNext);
+    expect(restoreKeymap({ ...defaultKeymap, sceneNext: [{ key: "PageDown" }] }).sceneNext).toEqual(
+      defaultKeymap.sceneNext,
+    );
+    expect(restoreKeymap({ sceneNext: [{ key: "j" }] }).sceneNext).toEqual([{ key: "j" }]);
+  });
+
+  it("moves between scenes with Ctrl and the vertical arrows", () => {
+    expect(actionFor(defaultKeymap, key("ArrowUp", "ArrowUp", { ctrlKey: true }))).toBe("scenePrev");
+    expect(actionFor(defaultKeymap, key("ArrowDown", "ArrowDown", { ctrlKey: true }))).toBe("sceneNext");
+    expect(actionFor(defaultKeymap, key("ArrowDown", "ArrowDown"))).toBe("stackNext");
   });
 
   it("ignores AltGr combinations and requires Ctrl for undo", () => {
