@@ -17,6 +17,7 @@
     extendDeck,
     isDoubleTap,
     jumpToScene,
+    waitingInScene,
     swipeDecision,
     zoomOrigin,
     type DeckMode,
@@ -146,7 +147,7 @@
   }
 
   function pickScene(index: number) {
-    const ids = new Set(scenes[index]?.photos.map((photo) => photo.id) ?? []);
+    const ids = waitingInScene(scenes[index]?.photos ?? [], mode);
     finishAdvance();
     const jumped = jumpToScene(deck, position, ids);
     if (!jumped) {
@@ -449,7 +450,7 @@
     onclose={() => (sheet = null)}
   />
 {:else if sheet === "scenes"}
-  <Scenes {scenes} current={sceneIndex} onpick={pickScene} onclose={() => (sheet = null)} />
+  <Scenes {scenes} {mode} current={sceneIndex} onpick={pickScene} onclose={() => (sheet = null)} />
 {:else if sheet === "menu"}
   <div class="menu" role="dialog" aria-label="Menu">
     <header>

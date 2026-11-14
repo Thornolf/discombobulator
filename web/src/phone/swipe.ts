@@ -35,6 +35,13 @@ export function extendDeck(
   return fresh.length ? [...deck, ...fresh] : [...deck];
 }
 
+export function waitingInScene(
+  photos: readonly { id: string; decision: Decision }[],
+  mode: DeckMode,
+): Set<string> {
+  return new Set(photos.filter((photo) => belongsInDeck(mode, photo.decision)).map((photo) => photo.id));
+}
+
 export function jumpToScene(
   deck: readonly string[],
   position: number,

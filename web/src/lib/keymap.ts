@@ -160,10 +160,32 @@ export function describe(binding: Binding): string {
 
 const storageKey = "discombobulator.keymap";
 
+const replacedDefaults: Partial<Record<Action, string>> = {
+  scenePrev: JSON.stringify([{ key: "PageUp" }]),
+  sceneNext: JSON.stringify([{ key: "PageDown" }]),
+};
+
+export function restoreKeymap(stored: Partial<Keymap> | null): Keymap {
+  const keymap = { ...defaultKeymap };
+  for (const [action, bindings] of Object.entries(stored ?? {}) as [Action, Binding[]][]) {
+    if (action in defaultKeymap && JSON.stringify(bindings) !== replacedDefaults[action]) {
+      keymap[action] = bindings;
+    }
+  }
+  return keymap;
+}
+
+export function changedFromDefault(keymap: Keymap): Partial<Keymap> {
+  return Object.fromEntries(
+    (Object.entries(keymap) as [Action, Binding[]][]).filter(
+      ([action, bindings]) => JSON.stringify(bindings) !== JSON.stringify(defaultKeymap[action]),
+    ),
+  );
+}
+
 export function loadKeymap(): Keymap {
   try {
-    const stored = JSON.parse(localStorage.getItem(storageKey) ?? "null") as Partial<Keymap> | null;
-    return { ...defaultKeymap, ...(stored ?? {}) };
+    return restoreKeymap(JSON.parse(localStorage.getItem(storageKey) ?? "null") as Partial<Keymap> | null);
   } catch {
     return { ...defaultKeymap };
   }
@@ -171,7 +193,7 @@ export function loadKeymap(): Keymap {
 
 export function saveKeymap(keymap: Keymap): void {
   try {
-    localStorage.setItem(storageKey, JSON.stringify(keymap));
+    localStorage.setItem(storageKey, JSON.stringify(changedFromDefault(keymap)));
   } catch {
     return;
   }

@@ -2,14 +2,22 @@
   import { thumbUrl } from "../lib/api";
   import type { Scene } from "../lib/grouping";
   import ProgressBar from "../desktop/ProgressBar.svelte";
-  import { clock, day, tally } from "../desktop/progress";
+  import { clock, day } from "../desktop/progress";
+  import { waitingInScene, type DeckMode } from "./swipe";
 
   let {
     scenes,
+    mode,
     current,
     onpick,
     onclose,
-  }: { scenes: Scene[]; current: number; onpick: (index: number) => void; onclose: () => void } = $props();
+  }: {
+    scenes: Scene[];
+    mode: DeckMode;
+    current: number;
+    onpick: (index: number) => void;
+    onclose: () => void;
+  } = $props();
 
   let list: HTMLElement | undefined = $state();
 
@@ -27,7 +35,7 @@
   <div class="list" bind:this={list}>
     {#each scenes as scene, index (scene.photos[0]?.id ?? index)}
       {@const first = scene.photos[0]}
-      {@const left = tally(scene.photos).undecided}
+      {@const left = waitingInScene(scene.photos, mode).size}
       <button
         class="scene"
         class:current={index === current}
@@ -46,7 +54,7 @@
           {/each}
         </div>
         <ProgressBar photos={scene.photos} />
-        <div class="sub">{left ? `${left} to decide` : "done ✓"}</div>
+        <div class="sub">{left ? `${left} ${mode === "inbox" ? "to decide" : "unsure"}` : "done ✓"}</div>
       </button>
     {/each}
     {#if !scenes.length}
