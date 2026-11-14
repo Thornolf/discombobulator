@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/Thornolf/discombobulator/compare/v0.2.0...v0.3.0) (2026-11-14)
+
+
+### Features
+
+* **desktop:** offer signed updates in a dialog with the release notes ([#63](https://github.com/Thornolf/discombobulator/issues/63)) ([52258f5](https://github.com/Thornolf/discombobulator/commit/52258f5d96629e1bb98a3c471db9d40490d9846f))
+
 ## [0.2.0](https://github.com/Thornolf/discombobulator/compare/v0.1.0...v0.2.0) (2026-11-14)
 
 
