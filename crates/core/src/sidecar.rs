@@ -1,17 +1,51 @@
+use std::borrow::Cow;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use quick_xml::Reader;
-use quick_xml::Writer;
+use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
+use quick_xml::name::{Namespace, NamespaceResolver, QName, ResolveResult};
+use quick_xml::{NsReader, Writer, XmlVersion};
 use thiserror::Error;
 
+use crate::fsx;
 use crate::model::{Decision, Mark, Photo};
 
 const XMP_NS: &str = "http://ns.adobe.com/xap/1.0/";
 const XMP_DM_NS: &str = "http://ns.adobe.com/xmp/1.0/DynamicMedia/";
-const MANAGED: [&str; 4] = ["xmp:Rating", "xmp:Label", "xmpDM:pick", "xmpDM:good"];
+const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 pub const MAX_SIDECAR_BYTES: u64 = 8 * 1024 * 1024;
+
+struct Field {
+    name: &'static str,
+    namespace: &'static str,
+    local: &'static str,
+}
+
+const FIELDS: [Field; 4] = [
+    Field {
+        name: "xmp:Rating",
+        namespace: XMP_NS,
+        local: "Rating",
+    },
+    Field {
+        name: "xmp:Label",
+        namespace: XMP_NS,
+        local: "Label",
+    },
+    Field {
+        name: "xmpDM:pick",
+        namespace: XMP_DM_NS,
+        local: "pick",
+    },
+    Field {
+        name: "xmpDM:good",
+        namespace: XMP_DM_NS,
+        local: "good",
+    },
+];
+
+const PREFIXES: [(&str, &str); 2] = [("xmp", XMP_NS), ("xmpDM", XMP_DM_NS)];
 
 #[derive(Debug, Error)]
 pub enum SidecarError {
@@ -27,6 +61,10 @@ pub enum SidecarError {
     TooLarge,
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+fn invalid(error: impl std::fmt::Display) -> SidecarError {
+    SidecarError::Invalid(error.to_string())
 }
 
 pub fn sidecar_path(photo: &Photo) -> Option<PathBuf> {
@@ -70,55 +108,152 @@ fn fresh(decision: &Decision) -> String {
         .map(|(name, value)| format!("\n    {name}=\"{value}\""))
         .collect();
     format!(
-        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Discombobulator\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n  <rdf:Description rdf:about=\"\"\n    xmlns:xmp=\"{XMP_NS}\"\n    xmlns:xmpDM=\"{XMP_DM_NS}\"{attributes}/>\n </rdf:RDF>\n</x:xmpmeta>\n"
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Discombobulator\">\n <rdf:RDF xmlns:rdf=\"{RDF_NS}\">\n  <rdf:Description rdf:about=\"\"\n    xmlns:xmp=\"{XMP_NS}\"\n    xmlns:xmpDM=\"{XMP_DM_NS}\"{attributes}/>\n </rdf:RDF>\n</x:xmpmeta>\n"
     )
 }
 
-fn is_managed(name: &str) -> bool {
-    MANAGED.contains(&name)
+fn namespace_of<'a>(result: &'a ResolveResult<'_>) -> Option<&'a str> {
+    match result {
+        ResolveResult::Bound(Namespace(namespace)) => Some(namespace),
+        ResolveResult::Unknown(prefix) => match prefix.as_str() {
+            "xmp" | "xap" => Some(XMP_NS),
+            "xmpDM" => Some(XMP_DM_NS),
+            _ => None,
+        },
+        ResolveResult::Unbound => None,
+    }
+}
+
+fn field_named(
+    resolved: (ResolveResult<'_>, quick_xml::name::LocalName<'_>),
+) -> Option<&'static str> {
+    let (result, local) = resolved;
+    let namespace = namespace_of(&result)?;
+    FIELDS
+        .iter()
+        .find(|field| field.namespace == namespace && field.local == local.as_ref())
+        .map(|field| field.name)
+}
+
+fn is_removable(field: Option<&'static str>, removable: &[&str]) -> bool {
+    field.is_some_and(|name| removable.contains(&name))
+}
+
+fn escape_attribute(value: &str) -> String {
+    quick_xml::escape::escape(value)
+        .replace('\n', "&#10;")
+        .replace('\t', "&#9;")
+}
+
+fn binding_for(
+    resolver: &NamespaceResolver,
+    own_keys: &[String],
+    preferred: &str,
+    namespace: &str,
+) -> (String, bool) {
+    let mut suffix = 0usize;
+    loop {
+        let prefix = if suffix == 0 {
+            preferred.to_owned()
+        } else {
+            format!("{preferred}{suffix}")
+        };
+        suffix += 1;
+        let declaration = format!("xmlns:{prefix}");
+        let probe = format!("{prefix}:x");
+        match resolver.resolve_attribute(QName(&probe)).0 {
+            ResolveResult::Bound(Namespace(bound)) if bound == namespace => {
+                return (prefix, false);
+            }
+            ResolveResult::Unknown(_) if !own_keys.contains(&declaration) => {
+                return (prefix, true);
+            }
+            _ => {}
+        }
+    }
 }
 
 fn rewrite_description(
     start: &BytesStart<'_>,
-    decision: &Decision,
+    resolver: &NamespaceResolver,
+    removable: &[&str],
+    values: Option<&[(&'static str, String)]>,
 ) -> Result<BytesStart<'static>, SidecarError> {
-    let name = start.name().as_ref().to_owned();
-    let mut rewritten = BytesStart::new(name);
-    let mut has_xmp = false;
-    let mut has_dm = false;
+    let mut rewritten = BytesStart::new(start.name().as_ref().to_owned());
+    let mut own_keys = Vec::new();
     for attribute in start.attributes() {
-        let attribute = attribute.map_err(|error| SidecarError::Invalid(error.to_string()))?;
+        let attribute = attribute.map_err(invalid)?;
         let key = attribute.key.as_ref();
-        if is_managed(key) {
+        own_keys.push(key.to_owned());
+        if is_removable(
+            field_named(resolver.resolve_attribute(attribute.key)),
+            removable,
+        ) {
             continue;
         }
-        has_xmp |= key == "xmlns:xmp";
-        has_dm |= key == "xmlns:xmpDM";
-        rewritten.push_attribute(attribute);
+        let value = attribute
+            .normalized_value(XmlVersion::Implicit1_0)
+            .map_err(invalid)?;
+        rewritten.push_attribute(Attribute {
+            key: QName(key),
+            value: Cow::Owned(escape_attribute(&value)),
+        });
     }
-    if !has_xmp {
-        rewritten.push_attribute(("xmlns:xmp", XMP_NS));
+    let Some(values) = values else {
+        return Ok(rewritten);
+    };
+    let mut prefixes = Vec::new();
+    for (preferred, namespace) in PREFIXES {
+        let (prefix, declare) = binding_for(resolver, &own_keys, preferred, namespace);
+        if declare {
+            rewritten.push_attribute((format!("xmlns:{prefix}").as_str(), namespace));
+        }
+        prefixes.push((namespace, prefix));
     }
-    if !has_dm {
-        rewritten.push_attribute(("xmlns:xmpDM", XMP_DM_NS));
-    }
-    for (name, value) in managed_values(decision) {
-        rewritten.push_attribute((name, value.as_str()));
+    for (name, value) in values {
+        let Some(field) = FIELDS.iter().find(|field| field.name == *name) else {
+            continue;
+        };
+        let Some((_, prefix)) = prefixes
+            .iter()
+            .find(|(namespace, _)| *namespace == field.namespace)
+        else {
+            continue;
+        };
+        rewritten.push_attribute((format!("{prefix}:{}", field.local).as_str(), value.as_str()));
     }
     Ok(rewritten)
 }
 
-pub fn merge(existing: &str, decision: &Decision) -> Result<String, SidecarError> {
-    let mut reader = Reader::from_str(existing);
+fn is_description(resolver: &NamespaceResolver, start: &BytesStart<'_>) -> bool {
+    let (result, local) = resolver.resolve_element(start.name());
+    matches!(result, ResolveResult::Bound(Namespace(namespace)) if namespace == RDF_NS)
+        && local.as_ref() == "Description"
+}
+
+pub fn merge(
+    existing: &str,
+    decision: &Decision,
+    previous: &[String],
+) -> Result<String, SidecarError> {
+    let values = managed_values(decision);
+    let removable: Vec<&str> = FIELDS
+        .iter()
+        .map(|field| field.name)
+        .filter(|name| {
+            values.iter().any(|(value_name, _)| value_name == name)
+                || previous.iter().any(|written| written == name)
+        })
+        .collect();
+    let mut reader = NsReader::from_str(existing);
     reader.config_mut().trim_text(false);
     let mut writer = Writer::new(Vec::new());
     let mut rewritten = false;
     let mut skip_depth = 0usize;
     let mut depth = 0usize;
     loop {
-        let event = reader
-            .read_event()
-            .map_err(|error| SidecarError::Invalid(error.to_string()))?;
+        let event = reader.read_event().map_err(invalid)?;
+        let resolver = reader.resolver();
         if skip_depth > 0 {
             match event {
                 Event::Start(_) => skip_depth += 1,
@@ -132,18 +267,36 @@ pub fn merge(existing: &str, decision: &Decision) -> Result<String, SidecarError
             Event::Eof if depth == 0 => break,
             Event::Eof => return Err(SidecarError::Invalid("unclosed element".into())),
             Event::DocType(_) => return Err(SidecarError::Doctype),
-            Event::Start(start) if is_managed(start.name().as_ref()) => {
+            Event::Start(start)
+                if is_removable(
+                    field_named(resolver.resolve_element(start.name())),
+                    &removable,
+                ) =>
+            {
                 skip_depth = 1;
                 continue;
             }
-            Event::Empty(start) if is_managed(start.name().as_ref()) => continue,
-            Event::Start(start) if !rewritten && start.name().as_ref() == "rdf:Description" => {
-                rewritten = true;
-                Event::Start(rewrite_description(&start, decision)?)
+            Event::Empty(start)
+                if is_removable(
+                    field_named(resolver.resolve_element(start.name())),
+                    &removable,
+                ) =>
+            {
+                continue;
             }
-            Event::Empty(start) if !rewritten && start.name().as_ref() == "rdf:Description" => {
+            Event::Start(start) if is_description(resolver, &start) => {
+                let additions = (!rewritten).then_some(values.as_slice());
                 rewritten = true;
-                Event::Empty(rewrite_description(&start, decision)?)
+                Event::Start(rewrite_description(
+                    &start, resolver, &removable, additions,
+                )?)
+            }
+            Event::Empty(start) if is_description(resolver, &start) => {
+                let additions = (!rewritten).then_some(values.as_slice());
+                rewritten = true;
+                Event::Empty(rewrite_description(
+                    &start, resolver, &removable, additions,
+                )?)
             }
             other => other,
         };
@@ -152,50 +305,94 @@ pub fn merge(existing: &str, decision: &Decision) -> Result<String, SidecarError
             Event::End(_) => depth = depth.saturating_sub(1),
             _ => {}
         }
-        writer
-            .write_event(output)
-            .map_err(|error| SidecarError::Invalid(error.to_string()))?;
+        writer.write_event(output).map_err(invalid)?;
     }
     if !rewritten {
         return Err(SidecarError::NoDescription);
     }
-    String::from_utf8(writer.into_inner()).map_err(|error| SidecarError::Invalid(error.to_string()))
+    String::from_utf8(writer.into_inner()).map_err(invalid)
+}
+
+fn validate(content: &str) -> Result<(), SidecarError> {
+    let mut reader = NsReader::from_str(content);
+    let mut depth = 0usize;
+    loop {
+        match reader.read_event().map_err(invalid)? {
+            Event::Eof if depth == 0 => return Ok(()),
+            Event::Eof => return Err(SidecarError::Invalid("unclosed element".into())),
+            Event::DocType(_) => return Err(SidecarError::Doctype),
+            Event::Start(start) => {
+                depth += 1;
+                for attribute in start.attributes() {
+                    attribute.map_err(invalid)?;
+                }
+            }
+            Event::Empty(start) => {
+                for attribute in start.attributes() {
+                    attribute.map_err(invalid)?;
+                }
+            }
+            Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
 }
 
 fn read_existing(path: &Path) -> Result<Option<String>, SidecarError> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
+    let bytes = match fsx::read_limited(path, MAX_SIDECAR_BYTES + 1) {
+        Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            return Err(match std::fs::symlink_metadata(path) {
+                Ok(metadata) if !metadata.file_type().is_file() => SidecarError::NotRegularFile,
+                _ => error.into(),
+            });
+        }
     };
-    if !metadata.file_type().is_file() {
-        return Err(SidecarError::NotRegularFile);
-    }
-    if metadata.len() > MAX_SIDECAR_BYTES {
+    if bytes.len() as u64 > MAX_SIDECAR_BYTES {
         return Err(SidecarError::TooLarge);
     }
-    let bytes = std::fs::read(path)?;
-    String::from_utf8(bytes)
-        .map(Some)
-        .map_err(|error| SidecarError::Invalid(error.to_string()))
+    String::from_utf8(bytes).map(Some).map_err(invalid)
 }
 
-pub fn write(path: &Path, decision: &Decision) -> Result<(), SidecarError> {
-    let content = match read_existing(path)? {
-        Some(existing) => merge(&existing, decision)?,
-        None => fresh(decision),
-    };
+pub fn write(
+    path: &Path,
+    decision: &Decision,
+    previous: &[String],
+) -> Result<Vec<String>, SidecarError> {
     let parent = path
         .parent()
         .ok_or_else(|| SidecarError::Io(std::io::Error::other("sidecar has no folder")))?;
-    let mut temporary = tempfile::Builder::new()
-        .prefix(".discombobulator-")
-        .suffix(".xmp.tmp")
-        .tempfile_in(parent)?;
-    temporary.write_all(content.as_bytes())?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    Ok(())
+    let written: Vec<String> = managed_values(decision)
+        .into_iter()
+        .map(|(name, _)| name.to_owned())
+        .collect();
+    let mut retried = false;
+    loop {
+        let existing = read_existing(path)?;
+        let content = match &existing {
+            Some(existing) => merge(existing, decision, previous)?,
+            None => fresh(decision),
+        };
+        validate(&content)?;
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".discombobulator-")
+            .suffix(".xmp.tmp")
+            .tempfile_in(parent)?;
+        temporary.write_all(content.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        if existing.is_some() {
+            temporary.persist(path).map_err(|error| error.error)?;
+            return Ok(written);
+        }
+        match temporary.persist_noclobber(path) {
+            Ok(_) => return Ok(written),
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists && !retried => {
+                retried = true;
+            }
+            Err(error) => return Err(error.error.into()),
+        }
+    }
 }
 
 pub fn exists(path: &Path) -> bool {
@@ -212,6 +409,126 @@ mod tests {
             favorite,
             rating,
         }
+    }
+
+    fn owned(decision: &Decision) -> Vec<String> {
+        managed_values(decision)
+            .into_iter()
+            .map(|(name, _)| name.to_owned())
+            .collect()
+    }
+
+    const RDF_OPEN: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#;
+    const RDF_CLOSE: &str = "</rdf:RDF></x:xmpmeta>";
+
+    fn document(body: &str) -> String {
+        format!("{RDF_OPEN}{body}{RDF_CLOSE}")
+    }
+
+    #[test]
+    fn removes_owned_fields_from_every_description() -> Result<(), SidecarError> {
+        let existing = document(
+            r#"<rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2"/><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="3" xmp:Label="Red" xmp:CreatorTool="LR"><xmp:Label>Blue</xmp:Label></rdf:Description>"#,
+        );
+        let merged = merge(
+            &existing,
+            &decision(None, false, 5),
+            &["xmp:Label".to_owned()],
+        )?;
+        assert_eq!(merged.matches("Rating").count(), 1);
+        assert!(merged.contains(r#"xmp:Rating="5""#));
+        assert!(!merged.contains("Label"));
+        assert!(merged.contains(r#"xmp:CreatorTool="LR""#));
+        Ok(())
+    }
+
+    #[test]
+    fn matches_fields_by_namespace_not_prefix() -> Result<(), SidecarError> {
+        let existing = document(
+            r#"<rdf:Description rdf:about="" xmlns:xap="http://ns.adobe.com/xap/1.0/" xmlns:dm="http://ns.adobe.com/xmp/1.0/DynamicMedia/" xap:Rating="4" dm:pick="1"><dm:good>true</dm:good></rdf:Description>"#,
+        );
+        let merged = merge(&existing, &decision(Some(Mark::Delete), false, 3), &[])?;
+        assert!(!merged.contains("xap:Rating"));
+        assert!(!merged.contains("dm:pick"));
+        assert!(!merged.contains("dm:good"));
+        assert!(merged.contains(r#"xmp:Rating="3""#));
+        assert!(merged.contains(r#"xmpDM:pick="-1""#));
+        Ok(())
+    }
+
+    #[test]
+    fn uses_a_fresh_prefix_when_xmp_is_taken() -> Result<(), SidecarError> {
+        let existing =
+            document(r#"<rdf:Description rdf:about="" xmlns:xmp="urn:other" xmp:Rating="keep"/>"#);
+        let merged = merge(&existing, &decision(None, false, 2), &[])?;
+        assert!(merged.contains(r#"xmp:Rating="keep""#));
+        assert!(merged.contains(r#"xmlns:xmp1="http://ns.adobe.com/xap/1.0/""#));
+        assert!(merged.contains(r#"xmp1:Rating="2""#));
+        Ok(())
+    }
+
+    #[test]
+    fn requotes_kept_attributes_safely() -> Result<(), SidecarError> {
+        let existing = document(
+            r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title='say "hi" &amp; &#10;bye'/>"#,
+        );
+        let merged = merge(&existing, &decision(Some(Mark::Approved), false, 0), &[])?;
+        validate(&merged)?;
+        let mut reader = NsReader::from_str(&merged);
+        let mut title = None;
+        loop {
+            match reader.read_event().map_err(invalid)? {
+                Event::Empty(start) => {
+                    for attribute in start.attributes() {
+                        let attribute = attribute.map_err(invalid)?;
+                        if attribute.key.as_ref() == "dc:title" {
+                            title = Some(
+                                attribute
+                                    .normalized_value(XmlVersion::Implicit1_0)
+                                    .map_err(invalid)?
+                                    .into_owned(),
+                            );
+                        }
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        assert_eq!(title.as_deref(), Some("say \"hi\" & \nbye"));
+        Ok(())
+    }
+
+    #[test]
+    fn keeps_values_the_app_did_not_write() -> Result<(), SidecarError> {
+        let existing = document(
+            r#"<rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4" xmp:Label="Red"/>"#,
+        );
+        let approved = decision(Some(Mark::Approved), false, 0);
+        let merged = merge(&existing, &approved, &[])?;
+        assert!(merged.contains(r#"xmp:Rating="4""#));
+        assert!(merged.contains(r#"xmp:Label="Red""#));
+        assert!(merged.contains(r#"xmpDM:pick="1""#));
+        let cleared = merge(
+            &existing,
+            &Decision::default(),
+            &["xmp:Rating".to_owned(), "xmpDM:pick".to_owned()],
+        )?;
+        assert!(!cleared.contains("Rating"));
+        assert!(cleared.contains(r#"xmp:Label="Red""#));
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_oversized_sidecars() -> Result<(), SidecarError> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("DSCF0001.xmp");
+        std::fs::write(&path, vec![b' '; MAX_SIDECAR_BYTES as usize + 1])?;
+        assert!(matches!(
+            write(&path, &Decision::default(), &[]),
+            Err(SidecarError::TooLarge)
+        ));
+        Ok(())
     }
 
     #[test]
@@ -243,8 +560,13 @@ mod tests {
 
     #[test]
     fn fresh_sidecar_is_valid_and_mergeable() -> Result<(), SidecarError> {
-        let first = fresh(&decision(Some(Mark::Approved), false, 2));
-        let merged = merge(&first, &decision(Some(Mark::Delete), false, 0))?;
+        let approved = decision(Some(Mark::Approved), false, 2);
+        let first = fresh(&approved);
+        let merged = merge(
+            &first,
+            &decision(Some(Mark::Delete), false, 0),
+            &owned(&approved),
+        )?;
         assert!(merged.contains("xmpDM:pick=\"-1\""));
         assert!(!merged.contains("xmpDM:pick=\"1\""));
         assert!(!merged.contains("xmp:Rating"));
@@ -263,7 +585,11 @@ mod tests {
  </rdf:RDF>
 </x:xmpmeta>
 <?xpacket end="w"?>"#;
-        let merged = merge(existing, &decision(Some(Mark::Unsure), false, 1))?;
+        let merged = merge(
+            existing,
+            &decision(Some(Mark::Unsure), false, 1),
+            &["xmpDM:pick".to_owned()],
+        )?;
         assert!(merged.contains(r#"crs:Exposure2012="+0.35""#));
         assert!(merged.contains("beach &amp; sea"));
         assert!(merged.contains("<?xpacket end=\"w\"?>"));
@@ -280,13 +606,14 @@ mod tests {
         assert!(matches!(
             merge(
                 r#"<!DOCTYPE x [<!ENTITY a "b">]><rdf:Description/>"#,
-                &Decision::default()
+                &Decision::default(),
+                &[]
             ),
             Err(SidecarError::Doctype)
         ));
-        assert!(merge("<x:xmpmeta><rdf:Description>", &Decision::default()).is_err());
+        assert!(merge("<x:xmpmeta><rdf:Description>", &Decision::default(), &[]).is_err());
         assert!(matches!(
-            merge("<x:xmpmeta/>", &Decision::default()),
+            merge("<x:xmpmeta/>", &Decision::default(), &[]),
             Err(SidecarError::NoDescription)
         ));
     }
@@ -295,8 +622,12 @@ mod tests {
     fn writes_new_sidecar_and_updates_it() -> Result<(), SidecarError> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("DSCF0001.xmp");
-        write(&path, &decision(Some(Mark::Approved), true, 4))?;
-        write(&path, &decision(None, false, 0))?;
+        let written = write(&path, &decision(Some(Mark::Approved), true, 4), &[])?;
+        assert_eq!(
+            written,
+            ["xmp:Rating", "xmp:Label", "xmpDM:pick", "xmpDM:good"]
+        );
+        assert!(write(&path, &decision(None, false, 0), &written)?.is_empty());
         let content = std::fs::read_to_string(&path)?;
         assert!(!content.contains("xmpDM:pick"));
         assert!(!content.contains("xmp:Label"));
@@ -315,7 +646,7 @@ mod tests {
         let link = dir.path().join("DSCF0001.xmp");
         std::os::unix::fs::symlink(&target, &link)?;
         assert!(matches!(
-            write(&link, &Decision::default()),
+            write(&link, &Decision::default(), &[]),
             Err(SidecarError::NotRegularFile)
         ));
         assert_eq!(std::fs::read_to_string(target)?, "keep");

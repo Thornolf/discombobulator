@@ -47,6 +47,22 @@ pub fn read_limited(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    match std::fs::hard_link(from, to) {
+        Ok(()) => std::fs::remove_file(from).inspect_err(|_| {
+            let _ = std::fs::remove_file(to);
+        }),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
+        Err(_) => match std::fs::symlink_metadata(to) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => std::fs::rename(from, to),
+            _ => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} already exists", to.display()),
+            )),
+        },
+    }
+}
+
 pub fn is_local_path(path: &Path) -> bool {
     #[cfg(windows)]
     {
@@ -89,6 +105,24 @@ mod tests {
         let path = dir.path().join("a.jpg");
         std::fs::write(&path, b"abcdef")?;
         assert_eq!(read_limited(&path, 3)?, b"abc");
+        Ok(())
+    }
+
+    #[test]
+    fn renames_without_replacing() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let from = dir.path().join("a.jpg");
+        let to = dir.path().join("b.jpg");
+        std::fs::write(&from, b"new")?;
+        std::fs::write(&to, b"old")?;
+        let error = rename_noreplace(&from, &to).err().map(|error| error.kind());
+        assert_eq!(error, Some(io::ErrorKind::AlreadyExists));
+        assert_eq!(std::fs::read(&to)?, b"old");
+        assert_eq!(std::fs::read(&from)?, b"new");
+        let free = dir.path().join("c.jpg");
+        rename_noreplace(&from, &free)?;
+        assert!(!from.exists());
+        assert_eq!(std::fs::read(&free)?, b"new");
         Ok(())
     }
 
