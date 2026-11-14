@@ -1,11 +1,16 @@
 <script lang="ts">
   import { api, thumbUrl } from "../lib/api";
-  import { keepPlan, withFavorite, withMark, type MarkAction } from "../lib/decisions";
+  import { keepPlan, withFavorite, withMark, withRating, type MarkAction } from "../lib/decisions";
+  import { actionFor, describe, type Action, type Keymap } from "../lib/keymap";
   import type { LibraryStore } from "../lib/library.svelte";
   import type { DuplicateGroup, Photo } from "../lib/types";
 
-  let { store, onopen, onclose }: { store: LibraryStore; onopen: (id: string) => void; onclose: () => void } =
-    $props();
+  let {
+    store,
+    keymap,
+    onopen,
+    onclose,
+  }: { store: LibraryStore; keymap: Keymap; onopen: (id: string) => void; onclose: () => void } = $props();
 
   let tolerance = $state(6);
   let groups = $state<DuplicateGroup[] | null>(null);
@@ -74,67 +79,56 @@
     }
   }
 
+  function rate(rating: number) {
+    if (current) store.decide([{ id: current.id, decision: withRating(current.decision, rating) }]);
+  }
+
+  function moveGroup(direction: 1 | -1) {
+    const target = groupIndex + direction;
+    if (target < 0 || target >= resolved.length) return;
+    groupIndex = target;
+    photoIndex = 0;
+  }
+
+  const handlers: Partial<Record<Action, () => void>> = {
+    focusNext: () => (photoIndex = Math.min(photoIndex + 1, (resolved[groupIndex]?.photos.length ?? 1) - 1)),
+    focusPrev: () => (photoIndex = Math.max(0, photoIndex - 1)),
+    stackNext: () => moveGroup(1),
+    stackPrev: () => moveGroup(-1),
+    keep: keepOne,
+    approve: () => mark("approved"),
+    delete: () => mark("delete"),
+    unsure: () => mark("unsure"),
+    clear: () => mark("clear"),
+    favorite: () => {
+      if (current) store.decide([{ id: current.id, decision: withFavorite(current.decision) }]);
+    },
+    undo: () => store.undo(),
+    rate0: () => rate(0),
+    rate1: () => rate(1),
+    rate2: () => rate(2),
+    rate3: () => rate(3),
+    rate4: () => rate(4),
+    rate5: () => rate(5),
+    solo: () => {
+      if (current) onopen(current.id);
+    },
+    back: () => onclose(),
+    duplicates: () => onclose(),
+  };
+
+  function keys(action: Action): string {
+    return keymap[action].map(describe).join("/");
+  }
+
   function onkeydown(event: KeyboardEvent) {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
-      event.preventDefault();
-      event.stopPropagation();
-      store.undo();
-      return;
-    }
-    if (event.target instanceof HTMLInputElement) return;
-    const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-    const group = resolved[groupIndex];
-    const handled = (() => {
-      switch (key) {
-        case "ArrowRight":
-          photoIndex = Math.min(photoIndex + 1, (group?.photos.length ?? 1) - 1);
-          return true;
-        case "ArrowLeft":
-          photoIndex = Math.max(0, photoIndex - 1);
-          return true;
-        case "ArrowDown":
-          if (groupIndex < resolved.length - 1) {
-            groupIndex += 1;
-            photoIndex = 0;
-          }
-          return true;
-        case "ArrowUp":
-          if (groupIndex > 0) {
-            groupIndex -= 1;
-            photoIndex = 0;
-          }
-          return true;
-        case "k":
-          keepOne();
-          return true;
-        case "x":
-        case "Delete":
-          mark("delete");
-          return true;
-        case "u":
-          mark("unsure");
-          return true;
-        case "a":
-          mark("approved");
-          return true;
-        case "f":
-          if (current) store.decide([{ id: current.id, decision: withFavorite(current.decision) }]);
-          return true;
-        case "Enter":
-          if (current) onopen(current.id);
-          return true;
-        case "Escape":
-        case "d":
-          onclose();
-          return true;
-        default:
-          return false;
-      }
-    })();
-    if (handled) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
+    const action = actionFor(keymap, event);
+    if (event.target instanceof HTMLInputElement && action !== "undo" && action !== "back") return;
+    const handler = action ? handlers[action] : undefined;
+    if (!handler) return;
+    event.preventDefault();
+    event.stopPropagation();
+    handler();
   }
 </script>
 
@@ -152,12 +146,15 @@
       >Similarity tolerance <input type="range" min="0" max="16" bind:value={tolerance} />
       {tolerance}/64</label
     >
-    <button onclick={onclose}>Close <kbd>Esc</kbd></button>
+    <button onclick={onclose}>Close <kbd>{keys("back")}</kbd></button>
   </header>
   <p class="help">
-    Exact = same bytes. Similar = perceptual hash within the tolerance. <kbd>↑</kbd><kbd>↓</kbd> group,
-    <kbd>←</kbd><kbd>→</kbd> photo, <kbd>K</kbd> keep this one and mark the undecided rest Delete,
-    <kbd>Enter</kbd> open in Stacks.
+    Exact = same bytes. Similar = perceptual hash within the tolerance. <kbd>{keys("stackPrev")}</kbd><kbd
+      >{keys("stackNext")}</kbd
+    >
+    group, <kbd>{keys("focusPrev")}</kbd><kbd>{keys("focusNext")}</kbd> photo,
+    <kbd>{keys("keep")}</kbd> keep this one and mark the undecided rest Delete, <kbd>{keys("solo")}</kbd> open in
+    Stacks.
   </p>
   {#if error}
     <p class="error">{error}</p>

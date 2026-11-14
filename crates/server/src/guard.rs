@@ -6,6 +6,8 @@ use axum::response::{IntoResponse, Response};
 
 pub const CSRF_HEADER: &str = "x-discombobulator";
 const FORWARDED_HOST: &str = "x-forwarded-host";
+const TAILSCALE_USER: &str = "tailscale-user-login";
+const TAILSCALE_FUNNEL: &str = "tailscale-funnel-request";
 
 fn hostname(authority: &str) -> &str {
     if let Some(rest) = authority.strip_prefix('[') {
@@ -22,6 +24,18 @@ pub fn is_allowed_host(authority: &str) -> bool {
             && name
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.'))
+}
+
+fn is_tailnet_name(authority: &str) -> bool {
+    hostname(authority)
+        .to_ascii_lowercase()
+        .ends_with(".ts.net")
+}
+
+pub fn came_through_tailnet(headers: &HeaderMap) -> bool {
+    headers.contains_key(TAILSCALE_USER)
+        || header_text(headers, HOST).is_some_and(is_tailnet_name)
+        || header_text(headers, FORWARDED_HOST).is_some_and(is_tailnet_name)
 }
 
 fn header_text(headers: &HeaderMap, name: impl axum::http::header::AsHeaderName) -> Option<&str> {
@@ -52,6 +66,9 @@ pub fn check(
     if !is_allowed_host(host) || forwarded.is_some_and(|value| !is_allowed_host(value)) {
         return Err(StatusCode::MISDIRECTED_REQUEST);
     }
+    if headers.contains_key(TAILSCALE_FUNNEL) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let reading = matches!(*method, Method::GET | Method::HEAD);
     if reading && !path.starts_with("/api/") {
         return Ok(());
@@ -68,7 +85,6 @@ pub fn check(
     if let Some(origin) = header_text(headers, ORIGIN) {
         let authority = origin_authority(origin).ok_or(StatusCode::FORBIDDEN)?;
         let same_host = authority.eq_ignore_ascii_case(host)
-            || forwarded.is_some_and(|value| authority.eq_ignore_ascii_case(value))
             || (origin.starts_with("https://")
                 && tailnet_host.is_some_and(|name| authority.eq_ignore_ascii_case(name)));
         if !same_host {
@@ -83,7 +99,15 @@ pub async fn middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    let tailnet = state.tailnet_host.read().ok().and_then(|name| name.clone());
+    let mut tailnet = state.tailnet_host.read().ok().and_then(|name| name.clone());
+    if tailnet.is_none()
+        && came_through_tailnet(request.headers())
+        && state.should_look_up_tailnet_host()
+    {
+        let lookup = state.clone();
+        let _ = tokio::task::spawn_blocking(move || lookup.refresh_tailnet_host()).await;
+        tailnet = state.tailnet_host.read().ok().and_then(|name| name.clone());
+    }
     if let Err(status) = check(
         request.method(),
         request.uri().path(),
@@ -121,6 +145,18 @@ mod tests {
             }
         }
         map
+    }
+
+    #[test]
+    fn refuses_requests_from_the_public_internet_through_funnel() {
+        let funnel = headers(&[
+            ("host", "desk.tail1234.ts.net"),
+            ("tailscale-funnel-request", "?1"),
+        ]);
+        assert_eq!(
+            check(&Method::GET, "/", &funnel, None),
+            Err(StatusCode::FORBIDDEN)
+        );
     }
 
     #[test]
@@ -191,6 +227,27 @@ mod tests {
             ),
             Ok(())
         );
+    }
+
+    #[test]
+    fn detects_requests_that_came_through_tailscale_serve() {
+        assert!(!came_through_tailnet(&headers(&[(
+            "host",
+            "127.0.0.1:47820"
+        )])));
+        assert!(!came_through_tailnet(&headers(&[("host", "localhost")])));
+        assert!(came_through_tailnet(&headers(&[(
+            "host",
+            "desk.tail1234.ts.net"
+        )])));
+        assert!(came_through_tailnet(&headers(&[
+            ("host", "127.0.0.1:47820"),
+            ("x-forwarded-host", "Desk.tail1234.TS.NET")
+        ])));
+        assert!(came_through_tailnet(&headers(&[
+            ("host", "127.0.0.1:47820"),
+            ("tailscale-user-login", "me@example.com")
+        ])));
     }
 
     #[test]
@@ -295,7 +352,30 @@ mod tests {
     }
 
     #[test]
-    fn tailnet_origin_matches_forwarded_host() {
+    fn forwarded_host_alone_does_not_vouch_for_the_origin() {
+        let headers = headers(&[
+            ("host", "127.0.0.1:47820"),
+            ("x-forwarded-host", "evil.tail1234.ts.net"),
+            (CSRF_HEADER, "1"),
+            ("origin", "https://evil.tail1234.ts.net"),
+        ]);
+        assert_eq!(
+            check(&Method::POST, "/api/library", &headers, None),
+            Err(StatusCode::FORBIDDEN)
+        );
+        assert_eq!(
+            check(
+                &Method::POST,
+                "/api/library",
+                &headers,
+                Some("desk.tail1234.ts.net")
+            ),
+            Err(StatusCode::FORBIDDEN)
+        );
+    }
+
+    #[test]
+    fn tailnet_origin_with_forwarded_host_matches_the_machine_name() {
         assert_eq!(
             check(
                 &Method::POST,
@@ -306,7 +386,7 @@ mod tests {
                     (CSRF_HEADER, "1"),
                     ("origin", "https://desk.tail1234.ts.net")
                 ]),
-                None
+                Some("desk.tail1234.ts.net")
             ),
             Ok(())
         );

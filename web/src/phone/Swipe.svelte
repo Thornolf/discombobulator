@@ -9,14 +9,24 @@
   import { warmUp } from "../lib/preload";
   import type { Decision, Photo } from "../lib/types";
   import Piles from "./Piles.svelte";
-  import { swipeDecision, type Direction } from "./swipe";
+  import { untrack } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
+  import {
+    belongsInDeck,
+    extendDeck,
+    isDoubleTap,
+    swipeDecision,
+    zoomOrigin,
+    type DeckMode,
+    type Direction,
+    type Tap,
+  } from "./swipe";
 
   let { store }: { store: LibraryStore } = $props();
 
-  type Mode = "inbox" | "unsure";
-
-  let mode = $state<Mode>("inbox");
+  let mode = $state<DeckMode>("inbox");
   let deck = $state<string[]>([]);
+  const departed = new SvelteSet<string>();
   let position = $state(0);
   let history: number[] = [];
   let started = $state(false);
@@ -25,6 +35,11 @@
   let dragging = $state(false);
   let flying = $state<Direction | null>(null);
   let zoom = $state(false);
+  let origin = $state("50% 50%");
+  let panX = $state(0);
+  let panY = $state(0);
+  let panStart: { x: number; y: number; panX: number; panY: number } | null = null;
+  let lastTap: Tap | null = null;
   let sheet = $state<"menu" | "piles" | "open" | "apply" | null>(null);
   let offline = $state<{ done: number; total: number } | null>(null);
   let offlineCount = $state<number | null>(null);
@@ -62,11 +77,10 @@
     toastTimer = setTimeout(() => (toast = null), 1_600);
   }
 
-  function begin(next: Mode) {
+  function begin(next: DeckMode) {
     mode = next;
-    deck = photos
-      .filter((photo) => (next === "inbox" ? !photo.decision.mark : photo.decision.mark === "unsure"))
-      .map((photo) => photo.id);
+    departed.clear();
+    deck = extendDeck([], photos, next);
     position = 0;
     history = [];
     started = true;
@@ -74,6 +88,27 @@
 
   $effect(() => {
     if (!started && store.photos.length) begin("inbox");
+  });
+
+  $effect(() => {
+    const latest = photos;
+    untrack(() => {
+      if (!started) return;
+      const known = deck;
+      for (const id of known.slice(0, position)) {
+        const photo = store.photo(id);
+        if (photo && !belongsInDeck(mode, photo.decision)) departed.add(id);
+      }
+      const extended = extendDeck(known, latest, mode, position, departed);
+      for (const id of extended.slice(known.length)) departed.delete(id);
+      if (extended.length !== known.length) deck = extended;
+    });
+  });
+
+  $effect(() => {
+    if (flying || position >= deck.length) return;
+    const photo = store.photo(deck[position] ?? "");
+    if (!photo || !belongsInDeck(mode, photo.decision)) position += 1;
   });
 
   $effect(() => {
@@ -90,7 +125,7 @@
     store.decide([{ id: photo.id, decision: decided }]);
     history.push(position);
     flying = direction;
-    zoom = false;
+    setZoom(false);
     advanceTimer = setTimeout(finishAdvance, 170);
   }
 
@@ -115,27 +150,70 @@
     notify("Undone");
   }
 
+  function setZoom(on: boolean, at = "50% 50%") {
+    zoom = on;
+    origin = at;
+    panX = 0;
+    panY = 0;
+    panStart = null;
+  }
+
   function pointerdown(event: PointerEvent) {
-    if (zoom) return;
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    if (zoom) {
+      panStart = { x: event.clientX, y: event.clientY, panX, panY };
+      return;
+    }
     start = { x: event.clientX, y: event.clientY };
     dragging = true;
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   }
 
   function pointermove(event: PointerEvent) {
+    if (panStart) {
+      panX = panStart.panX + event.clientX - panStart.x;
+      panY = panStart.panY + event.clientY - panStart.y;
+      return;
+    }
     if (!start) return;
     dragX = event.clientX - start.x;
     dragY = event.clientY - start.y;
   }
 
   function resetDrag() {
+    panStart = null;
     start = null;
     dragging = false;
     dragX = 0;
     dragY = 0;
   }
 
-  function pointerup() {
+  function tapped(event: PointerEvent): boolean {
+    const from = panStart ?? start;
+    if (!from || Math.hypot(event.clientX - from.x, event.clientY - from.y) >= 10) {
+      lastTap = null;
+      return false;
+    }
+    const tap = { at: event.timeStamp, x: event.clientX, y: event.clientY };
+    if (!isDoubleTap(lastTap, tap)) {
+      lastTap = tap;
+      return false;
+    }
+    lastTap = null;
+    if (zoom) setZoom(false);
+    else
+      setZoom(true, zoomOrigin((event.currentTarget as HTMLElement).getBoundingClientRect(), tap.x, tap.y));
+    return true;
+  }
+
+  function pointerup(event: PointerEvent) {
+    if (tapped(event)) {
+      resetDrag();
+      return;
+    }
+    if (panStart) {
+      panStart = null;
+      return;
+    }
     if (!start) return;
     start = null;
     dragging = false;
@@ -176,7 +254,7 @@
       act(direction);
     } else if (key === " ") {
       event.preventDefault();
-      zoom = !zoom;
+      setZoom(!zoom);
     } else if (key === "p") {
       sheet = "piles";
     }
@@ -271,10 +349,15 @@
           onpointermove={pointermove}
           onpointerup={pointerup}
           onpointercancel={resetDrag}
-          ondblclick={() => (zoom = !zoom)}
         >
           <img class="thumb" src={thumbUrl(current)} alt="" />
-          <img class="full" src={previewUrl(current)} alt="" />
+          <img
+            class="full"
+            src={previewUrl(current)}
+            alt=""
+            style:transform-origin={origin}
+            style:transform={zoom ? `translate(${panX}px, ${panY}px) scale(2.6)` : undefined}
+          />
           <span class="stamp s-left" class:show={stamp === "left"}>DELETE</span>
           <span class="stamp s-right" class:show={stamp === "right"}>LR ✓</span>
           <span class="stamp s-up" class:show={stamp === "up"}>♥ FAVORITE</span>
@@ -291,7 +374,11 @@
       <div class="done">
         {#if !store.photos.length}
           <h2>{store.server?.root ? "Loading…" : "No folder open"}</h2>
-          <button onclick={() => (sheet = "open")}>Open a folder</button>
+          {#if store.server?.can_open_folders}
+            <button onclick={() => (sheet = "open")}>Open a folder</button>
+          {:else if !store.server?.root}
+            <p class="hint">Open a folder on the PC, then come back here.</p>
+          {/if}
         {:else}
           <h2>{mode === "inbox" ? "Inbox zero" : "Second look done"}</h2>
           <div class="sum">
@@ -345,7 +432,9 @@
       <button onclick={() => (sheet = null)}>Done</button>
     </header>
     <p class="folder">{store.server?.root ?? "No folder open"}</p>
-    <button onclick={() => (sheet = "open")} disabled={!store.online}>Open another folder</button>
+    {#if store.server?.can_open_folders}
+      <button onclick={() => (sheet = "open")} disabled={!store.online}>Open another folder</button>
+    {/if}
     <button onclick={saveOffline} disabled={!!offline || !store.photos.length || !store.online}>
       {offline ? `Saving ${offline.done}/${offline.total}…` : "Download this folder for offline"}
     </button>
@@ -476,9 +565,6 @@
   .card.top.dragging {
     transition: none;
   }
-  .card.zoom .full {
-    transform: scale(2.6);
-  }
   .fly-left {
     transform: translate(-130%, 40px) rotate(-18deg);
     opacity: 0;
@@ -566,6 +652,10 @@
     justify-content: center;
     gap: 14px;
     text-align: center;
+  }
+  .hint {
+    margin: 0;
+    color: #8b8e95;
   }
   .done h2 {
     margin: 0;

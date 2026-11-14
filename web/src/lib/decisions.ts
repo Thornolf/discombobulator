@@ -24,6 +24,17 @@ export function sameDecision(a: Decision, b: Decision): boolean {
   return a.mark === b.mark && a.favorite === b.favorite && a.rating === b.rating;
 }
 
+export function rebase(base: Decision | undefined, local: Decision, remote: Decision): Decision {
+  if (!base) {
+    return local;
+  }
+  return {
+    mark: local.mark !== base.mark ? local.mark : remote.mark,
+    favorite: local.favorite !== base.favorite ? local.favorite : remote.favorite,
+    rating: local.rating !== base.rating ? local.rating : remote.rating,
+  };
+}
+
 export interface Framed {
   id: string;
   decision: Decision;

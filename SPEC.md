@@ -72,6 +72,10 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
   Favorite and rating do not.
 - Undo reverts the last change, including every frame changed by one Keep.
 - LrC 13.2+ reads pick flags from XMP.
+- Every decision write gets an increasing sequence number. `/api/state` reports the latest one as
+  `decisions_seq` and `GET /api/decisions?since=N` lists the decisions written after `N`, so marks made
+  on one client (desktop or phone) appear on the others at their next poll, without a rescan. A
+  client keeps its own not-yet-synced marks over remote ones.
 
 ### XMP sidecars
 
@@ -137,12 +141,17 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
 
 - One card at a time from the inbox (unmarked photos), next card peeking behind.
 - Swipe or arrows: left Delete, right approve, up favorite + approve, down Unsure. Buttons for the same,
-  plus undo. Double tap zooms.
+  plus undo. Double tap (two taps under 300 ms and 20 px apart) zooms at the tapped point; one finger
+  pans while zoomed and another double tap zooms out.
+- The deck follows the library: photos that become unmarked elsewhere join its end, and cards marked
+  on another client are skipped when reached.
 - Badge "Looks like the previous one" when the dHash is close.
 - End screen: totals, "Re-check unsure" pass, "Review piles" (grid per pile: Delete, Unsure, Approved,
   Favorites; change a photo or send it back to the inbox), Apply.
 - Offline: "Download for offline" stores the folder's photo list and previews on the phone; marks made
   offline are queued with the folder they belong to and synced when the PC has that folder open.
+  Sync is per field: a queued mark only overrides the fields changed on the phone (mark, favorite,
+  rating) and keeps whatever the PC changed in the others.
   Home-screen web apps on iOS are exempt from Safari's 7-day storage eviction. "Remove offline copy"
   frees the space. Only the phone shell installs the service worker; the desktop never caches photos.
 - Sending a photo back to the inbox clears its mark and keeps its favorite.
@@ -172,12 +181,22 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
 ## Security
 
 - HTTP server binds `127.0.0.1` only; phone access only through `tailscale serve`.
+- Enabling phone access never replaces another `tailscale serve` handler on HTTPS port 443: when one
+  is there the app stops and asks the user to remove it first. On Windows, `tailscale.exe` is found
+  through the `InstallDir` value of `HKLM\SOFTWARE\Tailscale IPN`, then under Program Files.
 - Requests whose `Host` is not `localhost`, `127.0.0.1` or a `*.ts.net` name are rejected (DNS
   rebinding).
 - State-changing requests need the `X-Discombobulator: 1` header and, when an `Origin` is sent, an
-  origin matching the host (blocks cross-site requests from web pages).
+  origin matching the `Host` header or the PC's own tailnet machine name (blocks cross-site requests
+  from web pages). `X-Forwarded-Host` is only checked against the host allowlist, never trusted to
+  vouch for an origin.
 - Photo ids are opaque; the API never takes a file path except to open a folder, and that path must be
   an existing directory.
+- Browsing and opening folders is reserved to the PC: `GET /api/folders` and `POST /api/library` answer
+  403 to requests that came through `tailscale serve` (a `*.ts.net` `Host` or `X-Forwarded-Host`, or a
+  `Tailscale-User-Login` header), so other tailnet devices never see the PC's folder tree. The phone
+  culls the folder the PC has open; `/api/state` reports `can_open_folders` so the phone hides the
+  folder picker.
 - The app never deletes a user file and never follows symlinks when moving.
 - RAF, JPEG, EXIF and XMP parsing is bounds-checked and never panics on malformed input.
 

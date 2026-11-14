@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -22,6 +23,13 @@ pub struct FileHashes {
 
 pub struct Store {
     connection: Mutex<Connection>,
+    decisions_seq: AtomicI64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecisionChanges {
+    pub seq: i64,
+    pub changes: Vec<(String, Decision)>,
 }
 
 const SCHEMA: &str = "
@@ -163,8 +171,20 @@ impl Store {
             )?;
             connection.pragma_update(None, "user_version", 2)?;
         }
+        if version < 3 {
+            connection.execute_batch(
+                "ALTER TABLE decisions ADD COLUMN seq INTEGER NOT NULL DEFAULT 0;
+                 CREATE INDEX IF NOT EXISTS decisions_seq ON decisions(seq);",
+            )?;
+            connection.pragma_update(None, "user_version", 3)?;
+        }
+        let seq: i64 =
+            connection.query_row("SELECT COALESCE(MAX(seq), 0) FROM decisions", [], |row| {
+                row.get(0)
+            })?;
         Ok(Store {
             connection: Mutex::new(connection),
+            decisions_seq: AtomicI64::new(seq),
         })
     }
 
@@ -284,19 +304,50 @@ impl Store {
         decision: Decision,
         now_ms: i64,
     ) -> Result<(), StoreError> {
-        self.lock()?.execute(
-            "INSERT INTO decisions (id, mark, favorite, rating, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5)
+        let connection = self.lock()?;
+        let seq = self.decisions_seq.load(Ordering::Acquire) + 1;
+        connection.execute(
+            "INSERT INTO decisions (id, mark, favorite, rating, updated_ms, seq) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET mark = excluded.mark, favorite = excluded.favorite,
-                 rating = excluded.rating, updated_ms = excluded.updated_ms",
+                 rating = excluded.rating, updated_ms = excluded.updated_ms, seq = excluded.seq",
             params![
                 id,
                 decision.mark.map(Mark::as_str),
                 decision.favorite,
                 decision.rating,
-                now_ms
+                now_ms,
+                seq
             ],
         )?;
+        self.decisions_seq.store(seq, Ordering::Release);
         Ok(())
+    }
+
+    pub fn decisions_seq(&self) -> i64 {
+        self.decisions_seq.load(Ordering::Acquire)
+    }
+
+    pub fn decisions_since(&self, since: i64) -> Result<DecisionChanges, StoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT id, mark, favorite, rating FROM decisions WHERE seq > ?1 ORDER BY seq",
+        )?;
+        let rows = statement.query_map(params![since], |row| {
+            let mark: Option<String> = row.get(1)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                Decision {
+                    mark: mark.as_deref().and_then(Mark::parse),
+                    favorite: row.get(2)?,
+                    rating: row.get(3)?,
+                },
+            ))
+        })?;
+        let changes = rows.collect::<Result<_, _>>()?;
+        Ok(DecisionChanges {
+            seq: self.decisions_seq.load(Ordering::Acquire),
+            changes,
+        })
     }
 
     pub fn hashes(&self, id: &str, fingerprint: &str) -> Result<Option<FileHashes>, StoreError> {
@@ -593,6 +644,55 @@ mod tests {
             Some(Decision::default())
         );
         assert_eq!(cleared.map(|p| p.has_decision), Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn decision_writes_get_increasing_sequence_numbers() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        assert_eq!(store.decisions_seq(), 0);
+        let approved = Decision {
+            mark: Some(Mark::Approved),
+            favorite: false,
+            rating: 0,
+        };
+        store.set_decision("a", approved, 1)?;
+        store.set_decision("b", Decision::default(), 2)?;
+        let start = store.decisions_since(0)?;
+        assert_eq!(start.seq, 2);
+        assert_eq!(start.changes.len(), 2);
+        store.set_decision("a", Decision::default(), 3)?;
+        let later = store.decisions_since(2)?;
+        assert_eq!(later.seq, 3);
+        assert_eq!(later.changes, vec![("a".to_owned(), Decision::default())]);
+        assert!(store.decisions_since(3)?.changes.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn sequence_survives_reopening_and_migrates_old_databases()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("library.sqlite3");
+        {
+            let connection = Connection::open(&path)?;
+            connection.execute_batch(SCHEMA)?;
+            connection.execute(
+                "INSERT INTO decisions (id, mark, favorite, rating, updated_ms) VALUES ('old', 'delete', 0, 0, 1)",
+                [],
+            )?;
+            connection.pragma_update(None, "user_version", 2)?;
+        }
+        {
+            let store = Store::open(&path)?;
+            assert_eq!(store.decisions_seq(), 0);
+            store.set_decision("a", Decision::default(), 1)?;
+            store.set_decision("b", Decision::default(), 2)?;
+        }
+        let store = Store::open(&path)?;
+        assert_eq!(store.decisions_seq(), 2);
+        store.set_decision("c", Decision::default(), 3)?;
+        assert_eq!(store.decisions_seq(), 3);
         Ok(())
     }
 
