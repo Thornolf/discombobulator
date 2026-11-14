@@ -1,5 +1,5 @@
 import { api, ApiError } from "./api";
-import { sameDecision } from "./decisions";
+import { rebase, sameDecision } from "./decisions";
 import type { Decision, DecisionChange, Photo, ServerState } from "./types";
 
 const pendingKey = "discombobulator.pending";
@@ -14,6 +14,7 @@ interface PendingEntry {
   id: string;
   root: string | null;
   decision: Decision;
+  base?: Decision;
 }
 
 type Pending = Map<string, PendingEntry>;
@@ -28,13 +29,17 @@ function isDecision(value: unknown): value is Decision {
 
 function readPending(raw: unknown, fallbackRoot: string | null): PendingEntry[] {
   if (Array.isArray(raw)) {
-    return raw.filter(
-      (entry): entry is PendingEntry =>
-        typeof entry === "object" &&
-        entry !== null &&
-        typeof (entry as PendingEntry).id === "string" &&
-        isDecision((entry as PendingEntry).decision),
-    );
+    return raw
+      .filter(
+        (entry): entry is PendingEntry =>
+          typeof entry === "object" &&
+          entry !== null &&
+          typeof (entry as PendingEntry).id === "string" &&
+          isDecision((entry as PendingEntry).decision),
+      )
+      .map((entry) =>
+        entry.base === undefined || isDecision(entry.base) ? entry : { ...entry, base: undefined },
+      );
   }
   if (typeof raw === "object" && raw !== null) {
     return Object.entries(raw).flatMap(([id, decision]) =>
@@ -177,14 +182,15 @@ export class LibraryStore {
     try {
       const photos = await api.photos();
       for (const photo of photos) {
-        const pending = this.#pending.get(pendingId(root, photo.id))?.decision;
         const local = this.#byId.get(photo.id);
+        const pending = this.#merge(root, photo.id, photo.decision);
         if (pending) {
           photo.decision = pending;
         } else if (local && (unsynced.has(photo.id) || (this.#editedAt.get(photo.id) ?? -1) >= startedAt)) {
           photo.decision = { ...local.decision };
         }
       }
+      savePending(this.#pending);
       this.setPhotos(photos, root);
       this.error = null;
     } finally {
@@ -198,14 +204,28 @@ export class LibraryStore {
     const result = await api.decisionsSince(since);
     for (const change of result.changes) {
       const photo = this.#byId.get(change.id);
-      if (!photo || this.#pending.has(pendingId(root, change.id))) {
+      if (!photo) {
         continue;
       }
-      if (!sameDecision(photo.decision, change.decision)) {
-        photo.decision = change.decision;
+      const next = this.#merge(root, change.id, change.decision) ?? change.decision;
+      if (!sameDecision(photo.decision, next)) {
+        photo.decision = next;
       }
     }
     this.#seq = result.seq;
+    savePending(this.#pending);
+    this.pendingCount = this.#pending.size;
+  }
+
+  #merge(root: string | null, id: string, remote: Decision): Decision | null {
+    const key = pendingId(root, id);
+    const entry = this.#pending.get(key);
+    if (!entry) {
+      return null;
+    }
+    const merged = rebase(entry.base, entry.decision, remote);
+    this.#pending.set(key, { ...entry, decision: merged, base: { ...remote } });
+    return merged;
   }
 
   setPhotos(photos: Photo[], root: string | null = this.#root): void {
@@ -247,10 +267,12 @@ export class LibraryStore {
     const root = this.#photosRoot ?? this.#root;
     for (const change of effective) {
       const photo = this.#byId.get(change.id);
+      const key = pendingId(root, change.id);
+      const base = this.#pending.has(key) ? this.#pending.get(key)?.base : photo && { ...photo.decision };
       if (photo) {
         photo.decision = change.decision;
       }
-      this.#pending.set(pendingId(root, change.id), { id: change.id, root, decision: change.decision });
+      this.#pending.set(key, { id: change.id, root, decision: change.decision, base });
       this.#editedAt.set(change.id, this.#edits);
     }
     this.#edits += 1;

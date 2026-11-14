@@ -30,12 +30,46 @@ struct SelfNode {
     dns_name: Option<String>,
 }
 
+pub fn install_dir_from_reg_query(output: &str) -> Option<PathBuf> {
+    output.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        if !parts.next()?.eq_ignore_ascii_case("InstallDir") {
+            return None;
+        }
+        if !parts.next()?.starts_with("REG_") {
+            return None;
+        }
+        let rest = line.split_once("REG_")?.1;
+        let value = rest.split_once(char::is_whitespace)?.1.trim();
+        (!value.is_empty()).then(|| PathBuf::from(value))
+    })
+}
+
+#[cfg(windows)]
+fn registered_install_dir() -> Option<PathBuf> {
+    let output = run(
+        &PathBuf::from("reg.exe"),
+        &["query", r"HKLM\SOFTWARE\Tailscale IPN", "/v", "InstallDir"],
+    )
+    .ok()?;
+    install_dir_from_reg_query(&output)
+}
+
+#[cfg(not(windows))]
+fn registered_install_dir() -> Option<PathBuf> {
+    None
+}
+
 fn tailscale_binary() -> Option<PathBuf> {
     let candidates: Vec<PathBuf> = if cfg!(windows) {
         let program_files = std::env::var_os("ProgramFiles")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"));
-        vec![program_files.join("Tailscale").join("tailscale.exe")]
+        registered_install_dir()
+            .map(|dir| dir.join("tailscale.exe"))
+            .into_iter()
+            .chain([program_files.join("Tailscale").join("tailscale.exe")])
+            .collect()
     } else {
         vec![
             PathBuf::from("/usr/bin/tailscale"),
@@ -195,6 +229,27 @@ pub fn serves_port(serve_json: &str, port: u16) -> bool {
         .any(|proxy| proxy == target)
 }
 
+pub fn foreign_https_handler(serve_json: &str, port: u16) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(serve_json) else {
+        return false;
+    };
+    let target = format!("http://127.0.0.1:{port}");
+    let raw_forward = value
+        .get("TCP")
+        .and_then(|tcp| tcp.get("443"))
+        .is_some_and(|entry| entry.get("TCPForward").is_some());
+    let other_web_handler = value
+        .get("Web")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flat_map(|sites| sites.iter())
+        .filter(|(site, _)| site.ends_with(":443"))
+        .filter_map(|(_, site)| site.get("Handlers").and_then(serde_json::Value::as_object))
+        .flat_map(|handlers| handlers.values())
+        .any(|handler| handler.get("Proxy").and_then(serde_json::Value::as_str) != Some(&target));
+    raw_forward || other_web_handler
+}
+
 pub fn dns_name(status_json: &str) -> Option<String> {
     let status: TailscaleStatus = serde_json::from_str(status_json).ok()?;
     let name = status.me?.dns_name?;
@@ -269,6 +324,18 @@ pub fn enable(port: u16) -> PhoneStatus {
         return missing();
     };
     let target = format!("http://127.0.0.1:{port}");
+    let occupied = run(&binary, &["serve", "status", "--json"])
+        .is_ok_and(|json| foreign_https_handler(&json, port));
+    if occupied {
+        return status_with(
+            None,
+            Some(Failure::new(
+                "Tailscale already serves something else on HTTPS port 443 of this PC. \
+                 Discombobulator will not replace it. Remove that handler \
+                 (tailscale serve --https=443 off) if you no longer need it, then try again.",
+            )),
+        );
+    }
     if let Err(failure) = run(&binary, &["serve", "--bg", "--https=443", &target]) {
         return status_with(None, Some(failure));
     }
@@ -308,6 +375,36 @@ mod tests {
         assert!(!serves_port("", 47820));
         assert!(!serves_port(r#"{"Web":[1,2]}"#, 47820));
         assert!(!serves_port("127.0.0.1:47820", 47820));
+    }
+
+    #[test]
+    fn spots_another_handler_on_port_443() {
+        let ours = r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"desk.tail1234.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:47820"}}}}}"#;
+        assert!(!foreign_https_handler(ours, 47820));
+        let other = r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"desk.tail1234.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}}}"#;
+        assert!(foreign_https_handler(other, 47820));
+        let extra_path = r#"{"Web":{"desk.tail1234.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:47820"},"/files":{"Path":"/srv"}}}}}"#;
+        assert!(foreign_https_handler(extra_path, 47820));
+        let raw = r#"{"TCP":{"443":{"TCPForward":"127.0.0.1:22"}}}"#;
+        assert!(foreign_https_handler(raw, 47820));
+        let other_port = r#"{"Web":{"desk.tail1234.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}}}"#;
+        assert!(!foreign_https_handler(other_port, 47820));
+        assert!(!foreign_https_handler("{}", 47820));
+        assert!(!foreign_https_handler("", 47820));
+    }
+
+    #[test]
+    fn reads_the_install_dir_from_reg_query_output() {
+        let output = "\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Tailscale IPN\r\n    InstallDir    REG_SZ    D:\\Apps\\Tailscale\r\n\r\n";
+        assert_eq!(
+            install_dir_from_reg_query(output),
+            Some(PathBuf::from(r"D:\Apps\Tailscale"))
+        );
+        assert_eq!(install_dir_from_reg_query("ERROR: not found"), None);
+        assert_eq!(
+            install_dir_from_reg_query("    InstallDir    REG_SZ    "),
+            None
+        );
     }
 
     #[test]

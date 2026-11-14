@@ -169,4 +169,24 @@ describe("LibraryStore", () => {
     expect(store.photo("a")?.decision.mark).toBe("approved");
     expect(store.photo("b")?.decision.mark).toBe("unsure");
   });
+
+  it("sends only the fields changed on this client once it syncs", async () => {
+    const store = new LibraryStore();
+    await store.poll();
+    store.stop();
+    server.unreachable = true;
+    store.decide([{ id: "a", decision: { mark: "approved", favorite: false, rating: 0 } }]);
+    record("a", { mark: null, favorite: true, rating: 4 });
+    await store.poll();
+    store.stop();
+    expect(store.photo("a")?.decision).toEqual({ mark: "approved", favorite: true, rating: 4 });
+    server.unreachable = false;
+    await store.flush();
+    expect(server.photos.find((item) => item.id === "a")?.decision).toEqual({
+      mark: "approved",
+      favorite: true,
+      rating: 4,
+    });
+    expect(store.pendingCount).toBe(0);
+  });
 });
