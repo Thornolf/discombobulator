@@ -24,9 +24,21 @@
       "icons/icon.ico"
     ],
     "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "startMenuFolder": "Discombobulator",
+        "displayLanguageSelector": false,
+        "compression": "lzma"
       }
-    }
+    },
+    "publisher": "Thornolf",
+    "copyright": "Copyright (c) 2026 Thornolf. MIT License.",
+    "category": "Photography",
+    "shortDescription": "Fast, keyboard-first photo culling for Fujifilm RAF + JPG",
+    "longDescription": "Cull Fujifilm RAF + JPG photos with one key per decision, hand picks to Lightroom through XMP sidecars, and swipe through them on an iPhone over Tailscale."
   }
 }
