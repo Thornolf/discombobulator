@@ -178,59 +178,51 @@ impl Default for BkTree {
     }
 }
 
-fn find(parents: &mut [usize], item: usize) -> usize {
-    let mut root = item;
-    while parents[root] != root {
-        root = parents[root];
-    }
-    let mut current = item;
-    while parents[current] != root {
-        let next = parents[current];
-        parents[current] = root;
-        current = next;
-    }
-    root
-}
-
 pub fn similar_groups(hashes: &[(String, u64)], tolerance: u32) -> Vec<Vec<String>> {
     let tolerance = tolerance.min(MAX_TOLERANCE);
     let mut tree = BkTree::new();
     for (index, (_, hash)) in hashes.iter().enumerate() {
         tree.insert(*hash, index);
     }
-    let mut parents: Vec<usize> = (0..hashes.len()).collect();
-    for (index, (_, hash)) in hashes.iter().enumerate() {
-        for other in tree.within(*hash, tolerance) {
-            let (a, b) = (find(&mut parents, index), find(&mut parents, other));
-            if a != b {
-                parents[b] = a;
-            }
+    let mut assigned = vec![false; hashes.len()];
+    let mut groups = Vec::new();
+    for (seed, (_, hash)) in hashes.iter().enumerate() {
+        if assigned[seed] {
+            continue;
         }
-    }
-    let mut members: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    for index in 0..hashes.len() {
-        let root = find(&mut parents, index);
-        members.entry(root).or_default().push(index);
-    }
-    let mut groups: Vec<Vec<usize>> = members
-        .into_values()
-        .filter(|group| group.len() > 1)
-        .collect();
-    groups.sort_by_key(|group| group.first().copied());
-    groups
-        .into_iter()
-        .map(|group| {
-            group
+        let mut members: Vec<usize> = tree
+            .within(*hash, tolerance)
+            .into_iter()
+            .filter(|&other| !assigned[other])
+            .collect();
+        if members.len() < 2 {
+            continue;
+        }
+        members.sort_unstable();
+        for &member in &members {
+            assigned[member] = true;
+        }
+        groups.push(
+            members
                 .into_iter()
                 .map(|index| hashes[index].0.clone())
-                .collect()
-        })
-        .collect()
+                .collect(),
+        );
+    }
+    groups
 }
 
 pub fn find_duplicates(library: &Library, tolerance: u32) -> Result<Vec<Group>, LibraryError> {
+    let exact = exact_groups(library, &library.photos()?);
+    combine(library, exact, tolerance)
+}
+
+pub fn combine(
+    library: &Library,
+    exact: Vec<Vec<String>>,
+    tolerance: u32,
+) -> Result<Vec<Group>, LibraryError> {
     let photos = library.photos()?;
-    let exact = exact_groups(library, &photos);
     let shadowed: std::collections::HashSet<&str> = exact
         .iter()
         .flat_map(|group| group.iter().skip(1).map(String::as_str))
@@ -301,16 +293,20 @@ mod tests {
     }
 
     #[test]
-    fn similar_groups_are_transitive() {
+    fn similar_groups_form_around_a_seed_without_chaining() {
         let hashes = vec![
             ("a".to_owned(), 0b0000u64),
             ("b".to_owned(), 0b0011),
             ("c".to_owned(), 0b1111),
-            ("d".to_owned(), u64::MAX),
+            ("d".to_owned(), 0b0011_1111),
+            ("e".to_owned(), u64::MAX),
         ];
         assert_eq!(
             similar_groups(&hashes, 2),
-            vec![vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]]
+            vec![
+                vec!["a".to_owned(), "b".to_owned()],
+                vec!["c".to_owned(), "d".to_owned()]
+            ]
         );
         assert!(similar_groups(&hashes, 0).is_empty());
     }

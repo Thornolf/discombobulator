@@ -24,6 +24,13 @@ pub struct AppState {
     pub session: RwLock<Option<Arc<session::Session>>>,
     pub version: Arc<AtomicU64>,
     pub apply_lock: std::sync::Mutex<()>,
+    pub exact_duplicates: std::sync::Mutex<Option<ExactCache>>,
+}
+
+pub struct ExactCache {
+    pub root: PathBuf,
+    pub version: u64,
+    pub groups: Vec<Vec<String>>,
 }
 
 impl AppState {
@@ -37,6 +44,7 @@ impl AppState {
             session: RwLock::new(None),
             version: Arc::new(AtomicU64::new(1)),
             apply_lock: std::sync::Mutex::new(()),
+            exact_duplicates: std::sync::Mutex::new(None),
         }))
     }
 

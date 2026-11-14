@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, thumbUrl } from "../lib/api";
-  import { withFavorite, withMark, type MarkAction } from "../lib/decisions";
+  import { keepPlan, withFavorite, withMark, type MarkAction } from "../lib/decisions";
   import type { LibraryStore } from "../lib/library.svelte";
   import type { DuplicateGroup, Photo } from "../lib/types";
 
@@ -22,21 +22,26 @@
   const current = $derived(resolved[groupIndex]?.photos[photoIndex]);
   const exactCount = $derived(resolved.filter((group) => group.kind === "exact").length);
 
-  async function load() {
+  let request = 0;
+
+  async function load(value: number) {
+    const ticket = ++request;
     error = null;
-    groups = null;
     try {
-      groups = await api.duplicates(tolerance);
+      const result = await api.duplicates(value);
+      if (ticket !== request) return;
+      groups = result;
       groupIndex = 0;
       photoIndex = 0;
     } catch (failure) {
-      error = failure instanceof Error ? failure.message : String(failure);
+      if (ticket === request) error = failure instanceof Error ? failure.message : String(failure);
     }
   }
 
   $effect(() => {
-    void tolerance;
-    void load();
+    const value = tolerance;
+    const timer = setTimeout(() => void load(value), 200);
+    return () => clearTimeout(timer);
   });
 
   $effect(() => {
@@ -52,15 +57,17 @@
   function keepOne() {
     const group = resolved[groupIndex];
     if (!group || !current) return;
-    store.decide(
-      group.photos.map((photo) => ({
-        id: photo.id,
-        decision:
-          photo.id === current.id
-            ? { ...photo.decision, mark: photo.decision.mark === "delete" ? null : photo.decision.mark }
-            : { ...photo.decision, mark: "delete" as const },
-      })),
-    );
+    const plan = keepPlan(group.photos, new Set(), current.id);
+    store.decide([
+      ...plan.approve.flatMap((id) => {
+        const photo = store.photo(id);
+        return photo ? [{ id, decision: { ...photo.decision, mark: "approved" as const } }] : [];
+      }),
+      ...plan.remove.flatMap((id) => {
+        const photo = store.photo(id);
+        return photo ? [{ id, decision: { ...photo.decision, mark: "delete" as const } }] : [];
+      }),
+    ]);
     if (groupIndex < resolved.length - 1) {
       groupIndex += 1;
       photoIndex = 0;
@@ -69,6 +76,12 @@
 
   function onkeydown(event: KeyboardEvent) {
     if (event.target instanceof HTMLInputElement) return;
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      event.stopPropagation();
+      store.undo();
+      return;
+    }
     const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
     const group = resolved[groupIndex];
     const handled = (() => {
@@ -143,8 +156,8 @@
   </header>
   <p class="help">
     Exact = same bytes. Similar = perceptual hash within the tolerance. <kbd>↑</kbd><kbd>↓</kbd> group,
-    <kbd>←</kbd><kbd>→</kbd> photo, <kbd>K</kbd> keep this one and mark the rest Delete, <kbd>Enter</kbd> open in
-    Stacks.
+    <kbd>←</kbd><kbd>→</kbd> photo, <kbd>K</kbd> keep this one and mark the undecided rest Delete,
+    <kbd>Enter</kbd> open in Stacks.
   </p>
   {#if error}
     <p class="error">{error}</p>

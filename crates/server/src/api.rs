@@ -350,10 +350,31 @@ pub async fn duplicates(
         .unwrap_or(6)
         .min(discombobulator_core::duplicates::MAX_TOLERANCE);
     tokio::task::spawn_blocking(move || {
-        discombobulator_core::duplicates::find_duplicates(&session.library, tolerance)
+        let mut cache = state
+            .exact_duplicates
+            .lock()
+            .map_err(|_| ApiError::internal("duplicates lock poisoned"))?;
+        let library = &session.library;
+        let version = state.version.load(Ordering::Relaxed);
+        let fresh = cache
+            .as_ref()
+            .is_some_and(|entry| entry.version == version && entry.root == library.root());
+        if !fresh {
+            let photos = library.photos().map_err(ApiError::internal)?;
+            *cache = Some(crate::ExactCache {
+                root: library.root().to_path_buf(),
+                version,
+                groups: discombobulator_core::duplicates::exact_groups(library, &photos),
+            });
+        }
+        let exact = cache
+            .as_ref()
+            .map(|entry| entry.groups.clone())
+            .unwrap_or_default();
+        discombobulator_core::duplicates::combine(library, exact, tolerance)
+            .map_err(ApiError::internal)
     })
     .await
     .map_err(ApiError::internal)?
     .map(Json)
-    .map_err(ApiError::internal)
 }
