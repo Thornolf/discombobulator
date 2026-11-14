@@ -218,12 +218,14 @@ impl Store {
                  AND NOT EXISTS (SELECT 1 FROM decisions WHERE id = ?2)",
             )?;
             let mut forget = transaction.prepare("DELETE FROM decisions WHERE id = ?1")?;
+            let mut unhash = transaction.prepare("DELETE FROM hashes WHERE id = ?1")?;
             for vanished in existing.iter().filter(|p| !keep.contains(p.id.as_str())) {
                 delete.execute(params![vanished.id])?;
                 if let Some(successor) = successor(vanished, photos) {
                     carry.execute(params![vanished.id, successor.id])?;
                 }
                 forget.execute(params![vanished.id])?;
+                unhash.execute(params![vanished.id])?;
             }
             let mut upsert = transaction.prepare(
                 "INSERT INTO photos (id, dir, stem, raf, jpg, size, modified_ms, fingerprint)
@@ -594,6 +596,23 @@ mod tests {
         store.save_hashes("id", "v1", &hashes)?;
         assert_eq!(store.hashes("id", "v1")?, Some(hashes));
         assert_eq!(store.hashes("id", "v2")?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn removed_photo_forgets_its_hashes() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        let p = photo("/p", "A");
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), &[])?;
+        let hashes = FileHashes {
+            quick: "q".into(),
+            full: None,
+        };
+        store.save_hashes(&p.id, &p.fingerprint, &hashes)?;
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), &[])?;
+        assert_eq!(store.hashes(&p.id, &p.fingerprint)?, Some(hashes));
+        store.replace_photos(Path::new("/p"), &[], &[])?;
+        assert_eq!(store.hashes(&p.id, &p.fingerprint)?, None);
         Ok(())
     }
 
