@@ -7,7 +7,7 @@ Tailscale. `SPEC.md` is the source of truth for behavior. Read it before changin
 
 - Everything in English: code, commits, docs, issues.
 - Zero comments in code. Names and structure carry the meaning. This covers Rust, TypeScript, Svelte
-  and CSS, and is enforced by `scripts/check-no-comments.py` and the ESLint `local/no-comments` rule.
+  and CSS, and is enforced by `cargo xtask check-comments` and the ESLint `local/no-comments` rule.
 - Every merge to `main` goes through a pull request. Commits follow Conventional Commits
   (`feat:`, `fix:`, `chore:`, `docs:`, `ci:`, `refactor:`, `test:`, `perf:`), because release-please
   builds the changelog and the version from them.
@@ -35,6 +35,7 @@ sub-issue of the issue it comes from. A PR that finishes an issue says `Closes #
 | `crates/core` | Scan, RAF/EXIF/XMP parsing, cache, SQLite, grouping, duplicates, apply |
 | `crates/server` | axum HTTP API + embedded Svelte app, binary `discombobulator` |
 | `crates/desktop` | Tauri shell that runs the server in-process and opens its page |
+| `crates/xtask` | Repository checks, e.g. `cargo xtask check-comments` |
 | `web` | Svelte + TypeScript app, desktop shell (Stacks) and phone shell (Swipe) |
 
 ## Commands
@@ -45,7 +46,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 npm --prefix web run lint && npm --prefix web run check && npm --prefix web test
-python3 scripts/check-no-comments.py
+cargo xtask check-comments
 cargo run -p discombobulator-server -- serve
 cargo run -p discombobulator-server --release -- bench <folder>
 ```
