@@ -2,10 +2,10 @@ use std::io::Cursor;
 
 use fast_image_resize::images::Image;
 use fast_image_resize::{FilterType as ResizeFilter, PixelType, ResizeAlg, ResizeOptions, Resizer};
-use image::codecs::jpeg::JpegEncoder;
 use image::imageops::{self, FilterType};
 use image::{DynamicImage, GrayImage, RgbImage};
 use jpeg_decoder::{Decoder, PixelFormat};
+use jpeg_encoder::{ColorType, Encoder};
 use thiserror::Error;
 
 pub const THUMB_EDGE: u32 = 360;
@@ -19,7 +19,7 @@ pub enum ImagingError {
     #[error("cannot decode JPEG: {0}")]
     Decode(#[from] jpeg_decoder::Error),
     #[error("cannot encode JPEG: {0}")]
-    Encode(#[from] image::ImageError),
+    Encode(#[from] jpeg_encoder::EncodingError),
     #[error("unsupported JPEG pixel format")]
     PixelFormat,
     #[error("JPEG has no image data")]
@@ -165,8 +165,10 @@ fn shrink(image: &RgbImage, edge: u32) -> Result<RgbImage, ImagingError> {
 }
 
 pub fn encode(image: &RgbImage) -> Result<Vec<u8>, ImagingError> {
+    let side = |value: u32| u16::try_from(value).map_err(|_| ImagingError::TooLarge);
+    let (width, height) = (side(image.width())?, side(image.height())?);
     let mut bytes = Vec::new();
-    JpegEncoder::new_with_quality(&mut bytes, JPEG_QUALITY).encode_image(image)?;
+    Encoder::new(&mut bytes, JPEG_QUALITY).encode(image.as_raw(), width, height, ColorType::Rgb)?;
     Ok(bytes)
 }
 
@@ -298,6 +300,18 @@ mod tests {
         ]);
         jpeg.extend([0xFF, 0xDA, 0x00, 0x08, 0x01, 1, 0x00, 0, 0, 0, 0xFF, 0xD9]);
         assert!(matches!(render(&jpeg, 1), Err(ImagingError::TooLarge)));
+    }
+
+    #[test]
+    fn encoded_jpeg_decodes_back_to_its_size() -> Result<(), ImagingError> {
+        let image = RgbImage::from_pixel(37, 21, image::Rgb([200, 40, 90]));
+        let decoded = decode_at_least(&encode(&image)?, 100)?;
+        assert_eq!(decoded.dimensions(), (37, 21));
+        assert!(matches!(
+            encode(&RgbImage::new(70_000, 1)),
+            Err(ImagingError::TooLarge)
+        ));
+        Ok(())
     }
 
     #[test]

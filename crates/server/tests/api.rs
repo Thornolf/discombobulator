@@ -20,11 +20,7 @@ fn jpeg() -> Vec<u8> {
     let image = image::RgbImage::from_fn(64, 48, |x, y| {
         image::Rgb([(x * 4) as u8, (y * 5) as u8, 90])
     });
-    let mut bytes = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new(&mut bytes)
-        .encode_image(&image)
-        .map(|()| bytes)
-        .unwrap_or_default()
+    discombobulator_core::imaging::encode(&image).unwrap_or_default()
 }
 
 fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {

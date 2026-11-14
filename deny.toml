@@ -24,6 +24,7 @@ allow = [
   "0BSD",
   "CDLA-Permissive-2.0",
 ]
+exceptions = [{ allow = ["IJG"], crate = "jpeg-encoder" }]
 
 [bans]
 multiple-versions = "allow"
