@@ -7,6 +7,7 @@ use axum::response::{IntoResponse, Response};
 pub const CSRF_HEADER: &str = "x-discombobulator";
 const FORWARDED_HOST: &str = "x-forwarded-host";
 const TAILSCALE_USER: &str = "tailscale-user-login";
+const TAILSCALE_FUNNEL: &str = "tailscale-funnel-request";
 
 fn hostname(authority: &str) -> &str {
     if let Some(rest) = authority.strip_prefix('[') {
@@ -65,6 +66,9 @@ pub fn check(
     if !is_allowed_host(host) || forwarded.is_some_and(|value| !is_allowed_host(value)) {
         return Err(StatusCode::MISDIRECTED_REQUEST);
     }
+    if headers.contains_key(TAILSCALE_FUNNEL) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let reading = matches!(*method, Method::GET | Method::HEAD);
     if reading && !path.starts_with("/api/") {
         return Ok(());
@@ -95,7 +99,15 @@ pub async fn middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    let tailnet = state.tailnet_host.read().ok().and_then(|name| name.clone());
+    let mut tailnet = state.tailnet_host.read().ok().and_then(|name| name.clone());
+    if tailnet.is_none()
+        && came_through_tailnet(request.headers())
+        && state.should_look_up_tailnet_host()
+    {
+        let lookup = state.clone();
+        let _ = tokio::task::spawn_blocking(move || lookup.refresh_tailnet_host()).await;
+        tailnet = state.tailnet_host.read().ok().and_then(|name| name.clone());
+    }
     if let Err(status) = check(
         request.method(),
         request.uri().path(),
@@ -133,6 +145,18 @@ mod tests {
             }
         }
         map
+    }
+
+    #[test]
+    fn refuses_requests_from_the_public_internet_through_funnel() {
+        let funnel = headers(&[
+            ("host", "desk.tail1234.ts.net"),
+            ("tailscale-funnel-request", "?1"),
+        ]);
+        assert_eq!(
+            check(&Method::GET, "/", &funnel, None),
+            Err(StatusCode::FORBIDDEN)
+        );
     }
 
     #[test]

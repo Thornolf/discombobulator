@@ -95,6 +95,7 @@
       known,
       latest,
       untrack(() => mode),
+      untrack(() => position),
     );
     if (extended.length !== known.length) deck = extended;
   });

@@ -47,8 +47,9 @@ pub fn install_dir_from_reg_query(output: &str) -> Option<PathBuf> {
 
 #[cfg(windows)]
 fn registered_install_dir() -> Option<PathBuf> {
+    let system_root = std::env::var_os("SystemRoot")?;
     let output = run(
-        &PathBuf::from("reg.exe"),
+        &PathBuf::from(system_root).join("System32").join("reg.exe"),
         &["query", r"HKLM\SOFTWARE\Tailscale IPN", "/v", "InstallDir"],
     )
     .ok()?;

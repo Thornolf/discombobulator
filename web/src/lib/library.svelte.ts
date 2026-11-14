@@ -201,13 +201,18 @@ export class LibraryStore {
   async pullDecisions(): Promise<void> {
     const since = Math.max(0, this.#seq);
     const root = this.#photosRoot ?? this.#root;
+    const startedAt = this.#edits;
     const result = await api.decisionsSince(since);
     for (const change of result.changes) {
       const photo = this.#byId.get(change.id);
       if (!photo) {
         continue;
       }
-      const next = this.#merge(root, change.id, change.decision) ?? change.decision;
+      const merged = this.#merge(root, change.id, change.decision);
+      if (!merged && (this.#editedAt.get(change.id) ?? -1) >= startedAt) {
+        continue;
+      }
+      const next = merged ?? change.decision;
       if (!sameDecision(photo.decision, next)) {
         photo.decision = next;
       }

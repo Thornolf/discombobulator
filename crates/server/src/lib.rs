@@ -28,6 +28,7 @@ pub struct AppState {
     pub exact_duplicates: std::sync::Mutex<Option<ExactCache>>,
     pub port: u16,
     pub tailnet_host: RwLock<Option<String>>,
+    pub tailnet_lookup: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 pub struct ExactCache {
@@ -51,11 +52,24 @@ impl AppState {
             exact_duplicates: std::sync::Mutex::new(None),
             port,
             tailnet_host: RwLock::new(None),
+            tailnet_lookup: std::sync::Mutex::new(None),
         }))
     }
 
     pub fn refresh_tailnet_host(&self) {
         self.remember_tailnet_host(phone::machine_name());
+    }
+
+    pub fn should_look_up_tailnet_host(&self) -> bool {
+        const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
+        let Ok(mut last) = self.tailnet_lookup.lock() else {
+            return false;
+        };
+        if last.is_some_and(|at| at.elapsed() < RETRY_AFTER) {
+            return false;
+        }
+        *last = Some(std::time::Instant::now());
+        true
     }
 
     pub fn remember_tailnet_host(&self, name: Option<String>) {

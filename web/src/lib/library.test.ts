@@ -7,6 +7,7 @@ const server = {
   decided: [] as DecisionChange[][],
   log: [] as DecisionChange[],
   photosGate: null as Promise<void> | null,
+  pullGate: null as Promise<void> | null,
   unreachable: false,
 };
 
@@ -47,10 +48,11 @@ vi.mock("./api", () => ({
       can_open_folders: true,
       decisions_seq: server.log.length,
     }),
-    decisionsSince: async (since: number) => ({
-      seq: server.log.length,
-      changes: server.log.slice(since),
-    }),
+    decisionsSince: async (since: number) => {
+      const reply = { seq: server.log.length, changes: server.log.slice(since) };
+      if (server.pullGate) await server.pullGate;
+      return reply;
+    },
     decide: async (changes: DecisionChange[]) => {
       if (server.unreachable) throw new Error("offline");
       server.decided.push(changes);
@@ -79,6 +81,7 @@ describe("LibraryStore", () => {
     server.decided = [];
     server.log = [];
     server.photosGate = null;
+    server.pullGate = null;
     server.unreachable = false;
   });
 
@@ -154,6 +157,21 @@ describe("LibraryStore", () => {
     await store.poll();
     store.stop();
     expect(store.photo("b")?.decision).toEqual({ mark: "delete", favorite: true, rating: 2 });
+  });
+
+  it("keeps a mark made while a stale pull was in flight", async () => {
+    const store = new LibraryStore();
+    await store.poll();
+    store.stop();
+    record("a", { mark: "delete", favorite: false, rating: 0 });
+    let release: () => void = () => undefined;
+    server.pullGate = new Promise((resolve) => (release = resolve));
+    const pulling = store.pullDecisions();
+    store.decide([{ id: "a", decision: { mark: "approved", favorite: false, rating: 0 } }]);
+    await store.flush();
+    release();
+    await pulling;
+    expect(store.photo("a")?.decision.mark).toBe("approved");
   });
 
   it("keeps pending local marks over remote changes", async () => {

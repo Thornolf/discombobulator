@@ -34,6 +34,12 @@ describe("deck", () => {
     expect(extendDeck([], photos, "unsure")).toEqual(["d"]);
   });
 
+  it("brings back a card that returned to the inbox after it was swiped", () => {
+    const photos = [photo("a", 0), photo("c", 1, { decision: decided({ mark: "approved" }) })];
+    expect(extendDeck(["a", "c"], photos, "inbox", 2)).toEqual(["a", "c", "a"]);
+    expect(extendDeck(["a", "c", "a"], photos, "inbox", 2)).toEqual(["a", "c", "a"]);
+  });
+
   it("knows which cards still belong to the deck", () => {
     expect(belongsInDeck("inbox", decided({}))).toBe(true);
     expect(belongsInDeck("inbox", decided({ mark: "delete" }))).toBe(false);
