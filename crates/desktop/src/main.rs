@@ -10,7 +10,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
-pub const MAIN_WINDOW: &str = "main";
+const MAIN_WINDOW: &str = "main";
 const MINIMIZED_FLAG: &str = "--minimized";
 const AUTOSTART_CONFIGURED: &str = "autostart_configured";
 
@@ -102,7 +102,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 };
                 let _ = autostart.set_checked(launcher.is_enabled().unwrap_or(false));
             }
-            "updates" => update::check_now(app),
+            "updates" => {
+                update::check_now(app);
+            }
             "quit" => app.exit(0),
             _ => {}
         })

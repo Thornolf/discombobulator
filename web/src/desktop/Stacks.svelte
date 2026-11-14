@@ -172,9 +172,9 @@
   }
 
   function checkForUpdates() {
-    notify("Checking for updates…");
     api
       .checkForUpdates()
+      .then(({ started }) => notify(started ? "Checking for updates…" : "An update check is already running"))
       .catch((error: unknown) =>
         notify(error instanceof Error ? error.message : "Could not check for updates"),
       );
@@ -280,7 +280,7 @@
     >
     <button onclick={() => (dialog = "apply")} disabled={!store.server?.root}>Apply <kbd>E</kbd></button>
     <button onclick={() => (dialog = "help")} aria-label="Keyboard shortcuts">?</button>
-    {#if store.server?.app_version}
+    {#if store.server}
       {#if store.server.can_check_updates}
         <button class="version" onclick={checkForUpdates} title="Check for updates"
           >v{store.server.app_version} · Updates</button

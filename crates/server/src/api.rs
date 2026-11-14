@@ -121,8 +121,7 @@ pub async fn check_for_updates(
         .update_check
         .get()
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, UPDATES_ON_PC_ONLY))?;
-    check();
-    Ok(Json(UpdateCheckDto { started: true }))
+    Ok(Json(UpdateCheckDto { started: check() }))
 }
 
 #[derive(Deserialize)]

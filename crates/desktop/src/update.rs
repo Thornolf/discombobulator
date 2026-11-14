@@ -22,9 +22,13 @@ pub fn watch(app: AppHandle) {
     });
 }
 
-pub fn check_now(app: &AppHandle) {
+pub fn check_now(app: &AppHandle) -> bool {
+    if BUSY.load(Ordering::SeqCst) {
+        return false;
+    }
     let app = app.clone();
     tauri::async_runtime::spawn(async move { check(&app, true).await });
+    true
 }
 
 async fn check(app: &AppHandle, asked: bool) {
@@ -37,8 +41,8 @@ async fn check(app: &AppHandle, asked: bool) {
     };
     match found {
         Ok(Some(update)) => offer(app, update).await,
-        Ok(None) if asked => tell(app, "You have the latest version."),
-        Err(error) if asked => tell(app, &format!("Could not check for updates: {error}")),
+        Ok(None) if asked => tell(app, "You have the latest version.").await,
+        Err(error) if asked => tell(app, &format!("Could not check for updates: {error}")).await,
         _ => {}
     }
     BUSY.store(false, Ordering::SeqCst);
@@ -65,20 +69,27 @@ async fn offer(app: &AppHandle, update: Update) {
     }
     match update.download_and_install(|_, _| {}, || {}).await {
         Ok(()) => app.restart(),
-        Err(error) => tell(app, &format!("The update could not be installed: {error}")),
+        Err(error) => tell(app, &format!("The update could not be installed: {error}")).await,
     }
 }
 
 fn dialog(app: &AppHandle, text: impl Into<String>) -> MessageDialogBuilder<tauri::Wry> {
     let builder = app.dialog().message(text);
-    match app.get_webview_window(crate::MAIN_WINDOW) {
+    let on_screen = app.get_webview_window(crate::MAIN_WINDOW).filter(|window| {
+        window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(true)
+    });
+    match on_screen {
         Some(window) => builder.parent(&window),
         None => builder,
     }
 }
 
-fn tell(app: &AppHandle, text: &str) {
-    dialog(app, text).title("Discombobulator").show(|_| {});
+async fn tell(app: &AppHandle, text: &str) {
+    let (closed, wait) = tokio::sync::oneshot::channel();
+    dialog(app, text).title("Discombobulator").show(move |_| {
+        let _ = closed.send(());
+    });
+    let _ = wait.await;
 }
 
 fn without_links(line: &str) -> String {

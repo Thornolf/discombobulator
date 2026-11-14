@@ -33,6 +33,8 @@ vi.mock("./api", () => ({
       processing: false,
       progress: null,
       can_open_folders: true,
+      app_version: "0.0.0",
+      can_check_updates: false,
       decisions_seq: server.log.length,
     }),
     photos: async () => {
@@ -46,6 +48,8 @@ vi.mock("./api", () => ({
       processing: false,
       progress: null,
       can_open_folders: true,
+      app_version: "0.0.0",
+      can_check_updates: false,
       decisions_seq: server.log.length,
     }),
     decisionsSince: async (since: number) => {
@@ -65,7 +69,16 @@ vi.mock("./api", () => ({
 const { LibraryStore } = await import("./library.svelte");
 
 function serverState(root: string, version = 1) {
-  return { root, version, processing: false, progress: null, can_open_folders: true, decisions_seq: 0 };
+  return {
+    root,
+    version,
+    processing: false,
+    progress: null,
+    can_open_folders: true,
+    decisions_seq: 0,
+    app_version: "0.0.0",
+    can_check_updates: false,
+  };
 }
 
 async function loaded() {

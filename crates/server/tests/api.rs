@@ -277,7 +277,7 @@ async fn update_checks_run_only_from_the_pc_and_only_in_the_desktop_app() -> Tes
     let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = Arc::clone(&checks);
     let installed = fixture.state.update_check.set(Box::new(move || {
-        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
     }));
     assert!(installed.is_ok());
     let (_, state) = send(&fixture.state, request("GET", "/api/state", None)?).await?;
@@ -293,7 +293,9 @@ async fn update_checks_run_only_from_the_pc_and_only_in_the_desktop_app() -> Tes
     let (status, body) = send(&fixture.state, request("POST", "/api/update", None)?).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["started"], json!(true));
-    assert_eq!(checks.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let (_, body) = send(&fixture.state, request("POST", "/api/update", None)?).await?;
+    assert_eq!(body["started"], json!(false));
+    assert_eq!(checks.load(std::sync::atomic::Ordering::SeqCst), 2);
     Ok(())
 }
 

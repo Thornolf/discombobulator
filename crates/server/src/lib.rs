@@ -32,7 +32,7 @@ pub struct AppState {
     pub update_check: std::sync::OnceLock<UpdateCheck>,
 }
 
-pub type UpdateCheck = Box<dyn Fn() + Send + Sync>;
+pub type UpdateCheck = Box<dyn Fn() -> bool + Send + Sync>;
 
 pub struct ExactCache {
     pub root: PathBuf,
