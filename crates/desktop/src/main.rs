@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod update;
+
 use std::sync::Arc;
 
 use discombobulator_server::{AppState, DEFAULT_PORT, local_address};
@@ -75,8 +77,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
+    let updates = MenuItem::with_id(
+        app,
+        "updates",
+        format!("Check for updates (v{})", app.package_info().version),
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &autostart, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &autostart, &updates, &quit])?;
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("Discombobulator")
         .menu(&menu)
@@ -93,6 +102,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 };
                 let _ = autostart.set_checked(launcher.is_enabled().unwrap_or(false));
             }
+            "updates" => update::check_now(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -132,6 +142,8 @@ fn main() {
             MacosLauncher::LaunchAgent,
             Some(vec![MINIMIZED_FLAG]),
         ))
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             start_server(Arc::clone(&state)).map_err(|error| error.to_string())?;
             configure_autostart(app.handle(), &state);
@@ -139,6 +151,7 @@ fn main() {
             if !minimized {
                 show_window(app.handle());
             }
+            update::watch(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
