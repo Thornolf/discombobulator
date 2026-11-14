@@ -131,15 +131,43 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
 | `D` | Duplicates view |
 | `O` | Open folder |
 | `?`, `H` | Help |
+| `I` | Show or hide the shot info panel |
+| `P` | Show or hide the focus point and detected faces |
+| `G` | Show or hide the histogram |
+| `Shift+G` | Histogram in colors or brightness |
+| `C` | Show or hide clipped highlights (pink) and shadows (blue) |
 
 - Marking a frame inside a burst moves focus to the next frame; after the last frame, to the next stack.
 - Keep: the selected frames (or the focused one) become approved; only still-undecided frames in the
   stack become Delete. Frames already approved or Unsure are never touched. Approve alone never affects
   other frames.
 
+### Shot info
+
+- Read on demand from the EXIF of the JPG (or of the RAF's embedded JPEG when there is no JPG), first
+  256 KiB only: exposure time, aperture, ISO, exposure compensation and mode, focal length and 35 mm
+  equivalent, body, lens.
+- From the Fujifilm maker notes: film simulation (monochrome ones come from the saturation tag), dynamic
+  range, grain, AF-S / AF-C / MF and AF area, the focus point (`FocusPixel`) and face boxes
+  (`FacePositions`), and the camera's own focus, blur and exposure warnings. Coordinates are scaled by
+  the EXIF pixel dimensions and turned with the EXIF orientation; a point outside the image is dropped.
+- Under each frame: file name, exposure and film simulation. A camera focus or blur warning shows as an
+  orange pill and turns the focus square orange.
+- The panel on the right shows the focused frame: histogram (colors or brightness, computed in the
+  browser from the preview, at most 1024 px on the long edge) with the share of clipped shadows and
+  highlights, then the shot details.
+- Clipping overlay: pink where any channel is at 254 or more, blue where every channel is at 1 or less.
+- Each of these on/off choices is remembered per device.
+- Every desktop option has a shortcut, shown next to its control and listed in `?`. Shift is part of a
+  shortcut only when it is bound with Shift; a custom key keeps priority over a new default that uses
+  the same key, which then shows as "none" in `?`.
+
 ## Phone UI: Swipe
 
 - One card at a time from the inbox (unmarked photos), next card peeking behind.
+- The card shows the exposure and film simulation and the focus point. The `i` button (or the `I` key)
+  opens a sheet with the histogram, the shot details and 1–5 star buttons (tapping the current rating
+  clears it).
 - Swipe or arrows: left Delete, right approve, up favorite + approve, down Unsure. Buttons for the same,
   plus undo. Double tap (two taps under 300 ms and 20 px apart) zooms at the tapped point; one finger
   pans while zoomed and another double tap zooms out.

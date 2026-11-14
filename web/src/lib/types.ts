@@ -24,6 +24,40 @@ export interface Photo {
   decision: Decision;
 }
 
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface Area {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+export interface ShotInfo {
+  camera: string | null;
+  lens: string | null;
+  focal_length: number | null;
+  focal_length_35mm: number | null;
+  exposure_time: string | null;
+  f_number: number | null;
+  iso: number | null;
+  exposure_bias: number | null;
+  program: string | null;
+  film_simulation: string | null;
+  dynamic_range: string | null;
+  grain: string | null;
+  focus_mode: string | null;
+  af_area: string | null;
+  focus_point: Point | null;
+  faces: Area[];
+  focus_warning: boolean | null;
+  blur_warning: boolean | null;
+  exposure_warning: boolean | null;
+}
+
 export interface Progress {
   total: number;
   done: number;

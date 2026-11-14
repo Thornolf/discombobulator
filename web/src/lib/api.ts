@@ -1,4 +1,5 @@
 import type {
+  ShotInfo,
   ApplyPlan,
   ApplyReport,
   DecisionChange,
@@ -47,6 +48,10 @@ export const api = {
   duplicates: (tolerance: number) => request<DuplicateGroup[]>(`/api/duplicates?tolerance=${tolerance}`),
   phone: () => request<PhoneStatus>("/api/phone"),
   enablePhone: () => request<PhoneStatus>("/api/phone", { method: "POST" }),
+  shotInfo: (photo: Photo) =>
+    request<ShotInfo>(
+      `/api/photos/${encodeURIComponent(photo.id)}/info?v=${encodeURIComponent(photo.version)}`,
+    ),
   checkForUpdates: () => request<{ started: boolean }>("/api/update", { method: "POST" }),
   recyclePlan: () => request<RecyclePlan>("/api/recycle"),
   recycle: (confirmed: RecyclePlan) =>
