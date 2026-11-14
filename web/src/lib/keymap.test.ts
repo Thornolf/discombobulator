@@ -24,6 +24,12 @@ describe("keymap", () => {
     expect(actionFor(defaultKeymap, key("à", "Digit0"))).toBe("rate0");
   });
 
+  it("moves between scenes with Ctrl and the vertical arrows", () => {
+    expect(actionFor(defaultKeymap, key("ArrowUp", "ArrowUp", { ctrlKey: true }))).toBe("scenePrev");
+    expect(actionFor(defaultKeymap, key("ArrowDown", "ArrowDown", { ctrlKey: true }))).toBe("sceneNext");
+    expect(actionFor(defaultKeymap, key("ArrowDown", "ArrowDown"))).toBe("stackNext");
+  });
+
   it("ignores AltGr combinations and requires Ctrl for undo", () => {
     expect(actionFor(defaultKeymap, key("@", "Digit0", { ctrlKey: true, altKey: true }))).toBeNull();
     expect(actionFor(defaultKeymap, key("z", "KeyW", { ctrlKey: true }))).toBe("undo");

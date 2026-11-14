@@ -2,19 +2,21 @@
   import ApplyDialog from "../components/ApplyDialog.svelte";
   import FolderPicker from "../components/FolderPicker.svelte";
   import { previewUrl, thumbUrl } from "../lib/api";
-  import { sortPhotos } from "../lib/grouping";
+  import { groupScenes, sortPhotos } from "../lib/grouping";
   import { hamming } from "../lib/hash";
   import type { LibraryStore } from "../lib/library.svelte";
   import { cachedCount, clearOffline, downloadForOffline } from "../lib/offline";
   import { warmUp } from "../lib/preload";
   import type { Decision, Photo } from "../lib/types";
   import Piles from "./Piles.svelte";
+  import Scenes from "./Scenes.svelte";
   import { untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import {
     belongsInDeck,
     extendDeck,
     isDoubleTap,
+    jumpToScene,
     swipeDecision,
     zoomOrigin,
     type DeckMode,
@@ -40,7 +42,7 @@
   let panY = $state(0);
   let panStart: { x: number; y: number; panX: number; panY: number } | null = null;
   let lastTap: Tap | null = null;
-  let sheet = $state<"menu" | "piles" | "open" | "apply" | null>(null);
+  let sheet = $state<"menu" | "piles" | "scenes" | "open" | "apply" | null>(null);
   let offline = $state<{ done: number; total: number } | null>(null);
   let offlineCount = $state<number | null>(null);
   let toast = $state<string | null>(null);
@@ -49,9 +51,14 @@
   let advanceTimer: ReturnType<typeof setTimeout> | undefined;
 
   const photos = $derived(sortPhotos(store.photos));
+  const scenes = $derived(groupScenes(store.photos));
+  const sceneOf = $derived(
+    new Map(scenes.flatMap((scene, index) => scene.photos.map((photo) => [photo.id, index] as const))),
+  );
   const current: Photo | undefined = $derived(store.photo(deck[position] ?? ""));
   const next: Photo | undefined = $derived(store.photo(deck[position + 1] ?? ""));
   const previous: Photo | undefined = $derived(store.photo(deck[position - 1] ?? ""));
+  const sceneIndex = $derived(current ? (sceneOf.get(current.id) ?? -1) : -1);
   const similar = $derived.by(() => {
     const distance = current && previous ? hamming(current.dhash, previous.dhash) : null;
     return distance !== null && distance <= 10;
@@ -136,6 +143,18 @@
     dragX = 0;
     dragY = 0;
     position += 1;
+  }
+
+  function pickScene(index: number) {
+    const ids = new Set(scenes[index]?.photos.map((photo) => photo.id) ?? []);
+    finishAdvance();
+    const jumped = jumpToScene(deck, position, ids);
+    if (!jumped) {
+      notify(mode === "inbox" ? "Nothing left to decide there" : "No unsure photos there");
+      return;
+    }
+    deck = jumped;
+    sheet = null;
   }
 
   function undo() {
@@ -307,6 +326,11 @@
     {#if !store.online}
       <span class="offline" title="Marks sync when the PC is reachable">offline · {store.pendingCount}</span>
     {/if}
+    {#if scenes.length}
+      <button onclick={() => (sheet = "scenes")} aria-label="Scenes">
+        Scene {sceneIndex >= 0 ? sceneIndex + 1 : "–"}/{scenes.length}
+      </button>
+    {/if}
     <button onclick={() => (sheet = "piles")}>Piles</button>
   </header>
   <div class="bar" aria-hidden="true">
@@ -424,6 +448,8 @@
     }}
     onclose={() => (sheet = null)}
   />
+{:else if sheet === "scenes"}
+  <Scenes {scenes} current={sceneIndex} onpick={pickScene} onclose={() => (sheet = null)} />
 {:else if sheet === "menu"}
   <div class="menu" role="dialog" aria-label="Menu">
     <header>

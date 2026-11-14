@@ -122,7 +122,7 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
 |---|---|
 | `←` `→` | Focus frame; past the end moves to the next/previous stack |
 | `↑` `↓` | Previous / next stack |
-| `PgUp` `PgDn` | Previous / next scene |
+| `PgUp` `PgDn`, `Ctrl+↑` `Ctrl+↓` | Previous / next scene |
 | `Enter` | Solo view of the focused frame; `Esc` leaves it |
 | `N` | Next stack with undecided photos |
 | `E` | Apply |
@@ -145,6 +145,9 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
   pans while zoomed and another double tap zooms out.
 - The deck follows the library: photos that become unmarked elsewhere join its end, and cards marked
   on another client are skipped when reached.
+- Header button `Scene n/N` opens the scenes list (date, time, count, mosaic, progress, how many are left
+  to decide). Picking a scene moves its first remaining card to the top of the deck; the cards skipped
+  over stay in the deck after it.
 - Badge "Looks like the previous one" when the dHash is close.
 - End screen: totals, "Re-check unsure" pass, "Review piles" (grid per pile: Delete, Unsure, Approved,
   Favorites; change a photo or send it back to the inbox), Apply.

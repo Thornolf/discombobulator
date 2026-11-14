@@ -35,6 +35,17 @@ export function extendDeck(
   return fresh.length ? [...deck, ...fresh] : [...deck];
 }
 
+export function jumpToScene(
+  deck: readonly string[],
+  position: number,
+  scene: ReadonlySet<string>,
+): string[] | null {
+  const rest = deck.slice(position);
+  const first = rest.findIndex((id) => scene.has(id));
+  if (first < 0) return null;
+  return [...deck.slice(0, position), ...rest.slice(first), ...rest.slice(0, first)];
+}
+
 export interface Tap {
   at: number;
   x: number;

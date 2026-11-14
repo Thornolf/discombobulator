@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { decided, photo } from "../lib/fixtures";
-import { belongsInDeck, extendDeck, isDoubleTap, swipeDecision, zoomOrigin } from "./swipe";
+import { belongsInDeck, extendDeck, isDoubleTap, jumpToScene, swipeDecision, zoomOrigin } from "./swipe";
 
 describe("swipeDecision", () => {
   it("maps each direction to its mark", () => {
@@ -54,6 +54,16 @@ describe("deck", () => {
     expect(belongsInDeck("inbox", decided({ mark: "delete" }))).toBe(false);
     expect(belongsInDeck("unsure", decided({ mark: "unsure" }))).toBe(true);
     expect(belongsInDeck("unsure", decided({}))).toBe(false);
+  });
+});
+
+describe("jumpToScene", () => {
+  it("brings the scene's first remaining card forward and keeps every other card", () => {
+    expect(jumpToScene(["a", "b", "c", "d", "e"], 1, new Set(["d", "e"]))).toEqual(["a", "d", "e", "b", "c"]);
+  });
+
+  it("leaves the deck alone when nothing of the scene is left", () => {
+    expect(jumpToScene(["a", "b"], 1, new Set(["a"]))).toBeNull();
   });
 });
 
