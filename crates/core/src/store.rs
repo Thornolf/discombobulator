@@ -100,21 +100,27 @@ fn photo_from_row(row: &Row<'_>) -> rusqlite::Result<Photo> {
     })
 }
 
-fn successor<'a>(vanished: &Photo, photos: &'a [Photo]) -> Option<&'a Photo> {
+fn successor<'a>(
+    vanished: &Photo,
+    photos: &'a [Photo],
+    known: &std::collections::HashSet<String>,
+) -> Option<&'a Photo> {
     let old_files: Vec<&Path> = vanished
         .raf
         .iter()
         .chain(vanished.jpg.iter())
         .map(PathBuf::as_path)
         .collect();
-    photos.iter().find(|photo| {
-        photo.id != vanished.id
+    let mut candidates = photos.iter().filter(|photo| {
+        !known.contains(&photo.id)
             && photo
                 .raf
                 .iter()
                 .chain(photo.jpg.iter())
                 .any(|file| old_files.contains(&file.as_path()))
-    })
+    });
+    let first = candidates.next()?;
+    candidates.next().is_none().then_some(first)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,8 +208,10 @@ impl Store {
         photos: &[Photo],
         unreadable: &[PathBuf],
     ) -> Result<(), StoreError> {
-        let existing: Vec<Photo> = self
-            .photos_under(root)?
+        let all_existing = self.photos_under(root)?;
+        let known: std::collections::HashSet<String> =
+            all_existing.iter().map(|photo| photo.id.clone()).collect();
+        let existing: Vec<Photo> = all_existing
             .into_iter()
             .filter(|photo| !unreadable.iter().any(|dir| photo.dir.starts_with(dir)))
             .collect();
@@ -221,7 +229,7 @@ impl Store {
             let mut unhash = transaction.prepare("DELETE FROM hashes WHERE id = ?1")?;
             for vanished in existing.iter().filter(|p| !keep.contains(p.id.as_str())) {
                 delete.execute(params![vanished.id])?;
-                if let Some(successor) = successor(vanished, photos) {
+                if let Some(successor) = successor(vanished, photos, &known) {
                     carry.execute(params![vanished.id, successor.id])?;
                 }
                 forget.execute(params![vanished.id])?;
@@ -474,6 +482,32 @@ mod tests {
             store.photo(&jpg_only.id)?.map(|p| p.decision),
             Some(delete_mark())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn decision_never_moves_onto_a_photo_that_already_existed() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        let dir = PathBuf::from("/p");
+        let pair = Photo {
+            id: crate::scan::photo_id(&dir, "A.RAF"),
+            raf: Some(dir.join("A.RAF")),
+            jpg: Some(dir.join("A.JPG")),
+            ..photo("/p", "A")
+        };
+        let extra = Photo {
+            id: crate::scan::photo_id(&dir, "A.jpeg"),
+            jpg: Some(dir.join("A.jpeg")),
+            ..photo("/p", "A")
+        };
+        store.replace_photos(&dir, &[pair.clone(), extra.clone()], &[])?;
+        store.set_decision(&extra.id, delete_mark(), 1)?;
+        let repaired = Photo {
+            jpg: Some(dir.join("A.jpeg")),
+            ..pair.clone()
+        };
+        store.replace_photos(&dir, std::slice::from_ref(&repaired), &[])?;
+        assert_eq!(store.photo(&pair.id)?.map(|p| p.has_decision), Some(false));
         Ok(())
     }
 
