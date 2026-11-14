@@ -23,7 +23,7 @@ def rust_comments(text):
             line += text.count("\n", i, end)
             i = end + (0 if text.startswith("//", i) else 2)
             continue
-        raw = re.match(r'b?r(#*)"', text[i:])
+        raw = re.match(r'[bc]?r(#*)"', text[i:])
         if raw and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
             closing = '"' + raw.group(1)
             end = text.find(closing, i + raw.end())
@@ -58,10 +58,14 @@ def css_comments(text):
 
 
 def main():
-    files = subprocess.run(["git", "ls-files"], capture_output=True, text=True, check=True).stdout.split()
+    top = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    listing = subprocess.run(["git", "ls-files", "-z"], capture_output=True, text=True, check=True, cwd=top)
+    files = [name for name in listing.stdout.split("\0") if name]
     problems = []
     for name in files:
-        path = pathlib.Path(name)
+        path = pathlib.Path(top) / name
         checker = {".rs": rust_comments, ".svelte": svelte_comments, ".css": css_comments}.get(path.suffix)
         if checker is None:
             continue

@@ -14,8 +14,7 @@ jobs:
   code-reviewer:
     if: >-
       ${{ !(github.event.pull_request.head.repo.full_name == github.repository &&
-      ((startsWith(github.head_ref, 'release-please--') && github.event.pull_request.user.login == 'github-actions[bot]') ||
-      (startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.user.login == 'dependabot[bot]'))) }}
+      github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -59,8 +58,7 @@ jobs:
   security-reviewer:
     if: >-
       ${{ !(github.event.pull_request.head.repo.full_name == github.repository &&
-      ((startsWith(github.head_ref, 'release-please--') && github.event.pull_request.user.login == 'github-actions[bot]') ||
-      (startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.user.login == 'dependabot[bot]'))) }}
+      github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
