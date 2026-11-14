@@ -170,6 +170,53 @@ async fn cross_site_writes_and_foreign_hosts_are_refused() -> TestResult {
     Ok(())
 }
 
+fn tailnet_request(
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> Result<Request<Body>, axum::http::Error> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("host", "127.0.0.1:47820")
+        .header("x-forwarded-host", "desk.tail1234.ts.net")
+        .header("tailscale-user-login", "me@example.com")
+        .header("x-discombobulator", "1")
+        .header("content-type", "application/json")
+        .body(body.map_or_else(Body::empty, |value| Body::from(value.to_string())))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tailnet_clients_cannot_browse_or_open_folders() -> TestResult {
+    let fixture = fixture()?;
+    let path = fixture.photos.to_string_lossy().into_owned();
+    let (status, body) = send(
+        &fixture.state,
+        tailnet_request("GET", "/api/folders", None)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(
+        body["error"]
+            .as_str()
+            .is_some_and(|text| text.contains("PC"))
+    );
+    let (status, _) = send(
+        &fixture.state,
+        tailnet_request("POST", "/api/library", Some(json!({ "path": path })))?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (_, state) = send(&fixture.state, tailnet_request("GET", "/api/state", None)?).await?;
+    assert_eq!(state["can_open_folders"], json!(false));
+    assert_eq!(state["root"], Value::Null);
+    let (_, state) = send(&fixture.state, request("GET", "/api/state", None)?).await?;
+    assert_eq!(state["can_open_folders"], json!(true));
+    let (status, _) = send(&fixture.state, request("GET", "/api/folders", None)?).await?;
+    assert_eq!(status, StatusCode::OK);
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn opening_a_missing_folder_is_a_client_error() -> TestResult {
     let fixture = fixture()?;

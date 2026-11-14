@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use discombobulator_core::library::{ProgressSnapshot, Variant};
 use discombobulator_core::model::{Decision, Photo};
@@ -62,11 +62,26 @@ pub struct StateDto {
     processing: bool,
     progress: Option<ProgressSnapshot>,
     unreadable: usize,
+    can_open_folders: bool,
 }
 
-pub async fn state(State(state): State<Arc<AppState>>) -> ApiResult<Json<StateDto>> {
+pub const PHONE_CANNOT_OPEN: &str =
+    "Folders can only be browsed and opened on the PC. The phone uses the folder the PC has open.";
+
+fn refuse_tailnet(headers: &HeaderMap) -> ApiResult<()> {
+    if crate::guard::came_through_tailnet(headers) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, PHONE_CANNOT_OPEN));
+    }
+    Ok(())
+}
+
+pub async fn state(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<StateDto>> {
     let current = state.session.read().map_err(ApiError::internal)?.clone();
     Ok(Json(StateDto {
+        can_open_folders: !crate::guard::came_through_tailnet(&headers),
         root: current
             .as_ref()
             .map(|session| session.library.root().to_string_lossy().into_owned()),
@@ -86,7 +101,11 @@ pub struct FolderQuery {
     path: Option<String>,
 }
 
-pub async fn folders(Query(query): Query<FolderQuery>) -> ApiResult<Json<folders::Listing>> {
+pub async fn folders(
+    headers: HeaderMap,
+    Query(query): Query<FolderQuery>,
+) -> ApiResult<Json<folders::Listing>> {
+    refuse_tailnet(&headers)?;
     match query.path.filter(|path| !path.is_empty()) {
         None => Ok(Json(folders::Listing {
             path: None,
@@ -125,8 +144,10 @@ pub fn open_folder(state: &AppState, path: PathBuf) -> ApiResult<()> {
 
 pub async fn open(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(request): Json<OpenRequest>,
 ) -> ApiResult<Json<StateDto>> {
+    refuse_tailnet(&headers)?;
     let path = PathBuf::from(request.path);
     let opener = Arc::clone(&state);
     tokio::task::spawn_blocking(move || -> ApiResult<()> {
@@ -136,7 +157,7 @@ pub async fn open(
     })
     .await
     .map_err(ApiError::internal)??;
-    self::state(State(state)).await
+    self::state(State(state), headers).await
 }
 
 #[derive(Serialize)]

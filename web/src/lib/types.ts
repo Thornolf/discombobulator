@@ -36,6 +36,7 @@ export interface ServerState {
   version: number;
   processing: boolean;
   progress: Progress | null;
+  can_open_folders: boolean;
 }
 
 export interface FolderEntry {

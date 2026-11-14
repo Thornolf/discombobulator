@@ -44,6 +44,12 @@
     focused ? keepPlan(stack, selected, focused.id) : { approve: [] as string[], remove: [] as string[] },
   );
   const progress = $derived(store.server?.progress);
+  const canOpen = $derived(store.server?.can_open_folders !== false);
+
+  function openFolder() {
+    if (canOpen) dialog = "open";
+    else notify("Open folders on the PC");
+  }
 
   function notify(message: string) {
     toast = message;
@@ -89,7 +95,7 @@
   let offeredOpen = false;
 
   $effect(() => {
-    if (!offeredOpen && store.server && !store.server.root && dialog === null) {
+    if (!offeredOpen && store.server && !store.server.root && canOpen && dialog === null) {
       offeredOpen = true;
       dialog = "open";
     }
@@ -210,7 +216,7 @@
       if (stack.length > 1) keepSelected();
     },
     duplicates: () => (dialog = "duplicates"),
-    open: () => (dialog = "open"),
+    open: openFolder,
     help: () => (dialog = "help"),
   };
 
@@ -241,7 +247,9 @@
 <div class="app">
   <header>
     <span class="logo">Discombobulator</span>
-    <button class="primary" onclick={() => (dialog = "open")}>Open folder</button>
+    {#if canOpen}
+      <button class="primary" onclick={openFolder}>Open folder</button>
+    {/if}
     <span class="grow"></span>
     <span class="where">
       {#if scenes.length}
@@ -329,7 +337,11 @@
           {:else}
             <p>Open a folder of RAF and JPG files to start culling.</p>
           {/if}
-          <button class="primary" onclick={() => (dialog = "open")}>Open folder</button>
+          {#if canOpen}
+            <button class="primary" onclick={openFolder}>Open folder</button>
+          {:else}
+            <p>Open a folder on the PC to cull it from here.</p>
+          {/if}
         </div>
       {/if}
       <Strip stacks={scene?.stacks ?? []} current={stackIndex} onpick={(index) => goTo(sceneIndex, index)} />

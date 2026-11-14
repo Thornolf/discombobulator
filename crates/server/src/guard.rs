@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Response};
 
 pub const CSRF_HEADER: &str = "x-discombobulator";
 const FORWARDED_HOST: &str = "x-forwarded-host";
+const TAILSCALE_USER: &str = "tailscale-user-login";
 
 fn hostname(authority: &str) -> &str {
     if let Some(rest) = authority.strip_prefix('[') {
@@ -22,6 +23,18 @@ pub fn is_allowed_host(authority: &str) -> bool {
             && name
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.'))
+}
+
+fn is_tailnet_name(authority: &str) -> bool {
+    hostname(authority)
+        .to_ascii_lowercase()
+        .ends_with(".ts.net")
+}
+
+pub fn came_through_tailnet(headers: &HeaderMap) -> bool {
+    headers.contains_key(TAILSCALE_USER)
+        || header_text(headers, HOST).is_some_and(is_tailnet_name)
+        || header_text(headers, FORWARDED_HOST).is_some_and(is_tailnet_name)
 }
 
 fn header_text(headers: &HeaderMap, name: impl axum::http::header::AsHeaderName) -> Option<&str> {
@@ -190,6 +203,27 @@ mod tests {
             ),
             Ok(())
         );
+    }
+
+    #[test]
+    fn detects_requests_that_came_through_tailscale_serve() {
+        assert!(!came_through_tailnet(&headers(&[(
+            "host",
+            "127.0.0.1:47820"
+        )])));
+        assert!(!came_through_tailnet(&headers(&[("host", "localhost")])));
+        assert!(came_through_tailnet(&headers(&[(
+            "host",
+            "desk.tail1234.ts.net"
+        )])));
+        assert!(came_through_tailnet(&headers(&[
+            ("host", "127.0.0.1:47820"),
+            ("x-forwarded-host", "Desk.tail1234.TS.NET")
+        ])));
+        assert!(came_through_tailnet(&headers(&[
+            ("host", "127.0.0.1:47820"),
+            ("tailscale-user-login", "me@example.com")
+        ])));
     }
 
     #[test]

@@ -291,7 +291,11 @@
       <div class="done">
         {#if !store.photos.length}
           <h2>{store.server?.root ? "Loading…" : "No folder open"}</h2>
-          <button onclick={() => (sheet = "open")}>Open a folder</button>
+          {#if store.server?.can_open_folders}
+            <button onclick={() => (sheet = "open")}>Open a folder</button>
+          {:else if !store.server?.root}
+            <p class="hint">Open a folder on the PC, then come back here.</p>
+          {/if}
         {:else}
           <h2>{mode === "inbox" ? "Inbox zero" : "Second look done"}</h2>
           <div class="sum">
@@ -345,7 +349,9 @@
       <button onclick={() => (sheet = null)}>Done</button>
     </header>
     <p class="folder">{store.server?.root ?? "No folder open"}</p>
-    <button onclick={() => (sheet = "open")} disabled={!store.online}>Open another folder</button>
+    {#if store.server?.can_open_folders}
+      <button onclick={() => (sheet = "open")} disabled={!store.online}>Open another folder</button>
+    {/if}
     <button onclick={saveOffline} disabled={!!offline || !store.photos.length || !store.online}>
       {offline ? `Saving ${offline.done}/${offline.total}…` : "Download this folder for offline"}
     </button>
@@ -566,6 +572,10 @@
     justify-content: center;
     gap: 14px;
     text-align: center;
+  }
+  .hint {
+    margin: 0;
+    color: #8b8e95;
   }
   .done h2 {
     margin: 0;

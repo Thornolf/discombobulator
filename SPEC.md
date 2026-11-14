@@ -180,6 +180,11 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
   vouch for an origin.
 - Photo ids are opaque; the API never takes a file path except to open a folder, and that path must be
   an existing directory.
+- Browsing and opening folders is reserved to the PC: `GET /api/folders` and `POST /api/library` answer
+  403 to requests that came through `tailscale serve` (a `*.ts.net` `Host` or `X-Forwarded-Host`, or a
+  `Tailscale-User-Login` header), so other tailnet devices never see the PC's folder tree. The phone
+  culls the folder the PC has open; `/api/state` reports `can_open_folders` so the phone hides the
+  folder picker.
 - The app never deletes a user file and never follows symlinks when moving.
 - RAF, JPEG, EXIF and XMP parsing is bounds-checked and never panics on malformed input.
 

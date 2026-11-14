@@ -19,13 +19,19 @@ vi.mock("./api", () => ({
     }
   },
   api: {
-    state: async () => ({ root: "/p", version: 1, processing: false, progress: null }),
+    state: async () => ({
+      root: "/p",
+      version: 1,
+      processing: false,
+      progress: null,
+      can_open_folders: true,
+    }),
     photos: async () => {
       const snapshot = server.photos.map((item) => ({ ...item, decision: { ...item.decision } }));
       if (server.photosGate) await server.photosGate;
       return snapshot;
     },
-    open: async () => ({ root: "/p", version: 2, processing: false, progress: null }),
+    open: async () => ({ root: "/p", version: 2, processing: false, progress: null, can_open_folders: true }),
     decide: async (changes: DecisionChange[]) => {
       if (server.unreachable) throw new Error("offline");
       server.decided.push(changes);
@@ -42,7 +48,7 @@ const { LibraryStore } = await import("./library.svelte");
 
 async function loaded() {
   const store = new LibraryStore();
-  store.server = { root: "/p", version: 1, processing: false, progress: null };
+  store.server = { root: "/p", version: 1, processing: false, progress: null, can_open_folders: true };
   await store.refresh();
   return store;
 }
@@ -95,13 +101,13 @@ describe("LibraryStore", () => {
     await store.flush();
     expect(store.pendingCount).toBe(1);
     server.unreachable = false;
-    store.server = { root: "/q", version: 1, processing: false, progress: null };
+    store.server = { root: "/q", version: 1, processing: false, progress: null, can_open_folders: true };
     store.setPhotos(store.photos, "/q");
     store.decide([{ id: "b", decision: { mark: "approved", favorite: false, rating: 0 } }]);
     await store.flush();
     expect(server.decided.flat().map((change) => change.id)).toEqual(["b"]);
     expect(store.pendingCount).toBe(1);
-    store.server = { root: "/p", version: 1, processing: false, progress: null };
+    store.server = { root: "/p", version: 1, processing: false, progress: null, can_open_folders: true };
     await store.flush();
     expect(server.decided.flat().map((change) => change.id)).toEqual(["b", "a"]);
     expect(store.pendingCount).toBe(0);
@@ -109,7 +115,7 @@ describe("LibraryStore", () => {
 
   it("tags marks with the folder of the list on screen during a folder switch", async () => {
     const store = await loaded();
-    store.server = { root: "/q", version: 2, processing: false, progress: null };
+    store.server = { root: "/q", version: 2, processing: false, progress: null, can_open_folders: true };
     server.unreachable = true;
     store.decide([{ id: "a", decision: { mark: "delete", favorite: false, rating: 0 } }]);
     await store.flush();
