@@ -10,6 +10,7 @@
   import type { Decision, Photo } from "../lib/types";
   import Piles from "./Piles.svelte";
   import { untrack } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import {
     belongsInDeck,
     extendDeck,
@@ -25,7 +26,7 @@
 
   let mode = $state<DeckMode>("inbox");
   let deck = $state<string[]>([]);
-  const departed = new Set<string>();
+  const departed = new SvelteSet<string>();
   let position = $state(0);
   let history: number[] = [];
   let started = $state(false);
@@ -91,17 +92,17 @@
 
   $effect(() => {
     const latest = photos;
-    if (!untrack(() => started)) return;
-    const known = untrack(() => deck);
-    const at = untrack(() => position);
-    const pile = untrack(() => mode);
-    for (const id of known.slice(0, at)) {
-      const photo = untrack(() => store.photo(id));
-      if (photo && !belongsInDeck(pile, photo.decision)) departed.add(id);
-    }
-    const extended = extendDeck(known, latest, pile, at, departed);
-    for (const id of extended.slice(known.length)) departed.delete(id);
-    if (extended.length !== known.length) deck = extended;
+    untrack(() => {
+      if (!started) return;
+      const known = deck;
+      for (const id of known.slice(0, position)) {
+        const photo = store.photo(id);
+        if (photo && !belongsInDeck(mode, photo.decision)) departed.add(id);
+      }
+      const extended = extendDeck(known, latest, mode, position, departed);
+      for (const id of extended.slice(known.length)) departed.delete(id);
+      if (extended.length !== known.length) deck = extended;
+    });
   });
 
   $effect(() => {
