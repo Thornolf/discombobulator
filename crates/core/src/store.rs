@@ -161,9 +161,14 @@ impl Store {
         &self,
         root: &Path,
         photos: &[Photo],
-        prune: bool,
+        unreadable: &[PathBuf],
     ) -> Result<(), StoreError> {
-        let existing: Vec<String> = self.photos_under(root)?.into_iter().map(|p| p.id).collect();
+        let existing: Vec<String> = self
+            .photos_under(root)?
+            .into_iter()
+            .filter(|photo| !unreadable.iter().any(|dir| photo.dir.starts_with(dir)))
+            .map(|photo| photo.id)
+            .collect();
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
         {
@@ -171,10 +176,7 @@ impl Store {
                 photos.iter().map(|p| p.id.as_str()).collect();
             let mut delete = transaction.prepare("DELETE FROM photos WHERE id = ?1")?;
             let mut forget = transaction.prepare("DELETE FROM decisions WHERE id = ?1")?;
-            for id in existing
-                .iter()
-                .filter(|id| prune && !keep.contains(id.as_str()))
-            {
+            for id in existing.iter().filter(|id| !keep.contains(id.as_str())) {
                 delete.execute(params![id])?;
                 forget.execute(params![id])?;
             }
@@ -275,7 +277,7 @@ mod tests {
     fn photo(dir: &str, stem: &str) -> Photo {
         let dir = PathBuf::from(dir);
         Photo {
-            id: crate::scan::photo_id(&dir, stem),
+            id: crate::scan::photo_id(&dir, &format!("{stem}.JPG")),
             jpg: Some(dir.join(format!("{stem}.JPG"))),
             dir,
             stem: stem.to_owned(),
@@ -299,19 +301,31 @@ mod tests {
     fn removed_photo_forgets_its_decision() -> Result<(), StoreError> {
         let store = Store::in_memory()?;
         let p = photo("/p", "A");
-        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), true)?;
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), &[])?;
         let delete = Decision {
             mark: Some(Mark::Delete),
             favorite: false,
             rating: 0,
         };
         store.set_decision(&p.id, delete, 1)?;
-        store.replace_photos(Path::new("/p"), &[], true)?;
-        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), true)?;
+        store.replace_photos(Path::new("/p"), &[], &[])?;
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), &[])?;
         assert_eq!(
             store.photo(&p.id)?.map(|p| p.decision),
             Some(Decision::default())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn unreadable_folders_are_not_pruned() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        let locked = photo("/p/locked", "A");
+        let open = photo("/p/open", "B");
+        store.replace_photos(Path::new("/p"), &[locked.clone(), open.clone()], &[])?;
+        store.replace_photos(Path::new("/p"), &[], &[PathBuf::from("/p/locked")])?;
+        assert!(store.photo(&locked.id)?.is_some());
+        assert!(store.photo(&open.id)?.is_none());
         Ok(())
     }
 
@@ -325,10 +339,10 @@ mod tests {
         store.replace_photos(
             Path::new(&root),
             &[photo(&root, "A"), photo(&sub, "B")],
-            true,
+            &[],
         )?;
-        store.replace_photos(Path::new(&other), &[photo(&other, "C")], true)?;
-        store.replace_photos(Path::new(&root), &[photo(&sub, "B")], true)?;
+        store.replace_photos(Path::new(&other), &[photo(&other, "C")], &[])?;
+        store.replace_photos(Path::new(&root), &[photo(&sub, "B")], &[])?;
         assert_eq!(store.photos_under(Path::new(&root))?.len(), 1);
         assert_eq!(store.photos_under(Path::new(&other))?.len(), 1);
         Ok(())
@@ -338,7 +352,7 @@ mod tests {
     fn decisions_round_trip_and_empty_decision_is_removed() -> Result<(), StoreError> {
         let store = Store::in_memory()?;
         let p = photo("/p", "A");
-        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), true)?;
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), &[])?;
         let decision = Decision {
             mark: Some(Mark::Unsure),
             favorite: true,
@@ -358,7 +372,7 @@ mod tests {
     fn rendering_marks_photo_processed_for_its_fingerprint() -> Result<(), StoreError> {
         let store = Store::in_memory()?;
         let p = photo("/p", "A");
-        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), true)?;
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), &[])?;
         store.save_rendering(
             &p.id,
             &Rendering {

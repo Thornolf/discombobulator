@@ -214,7 +214,7 @@ impl Library {
         let scan = scan::scan(&self.root)?;
         let photos: Vec<Photo> = scan.sources.iter().map(photo_from_source).collect();
         self.store
-            .replace_photos(&self.root, &photos, scan.errors == 0)?;
+            .replace_photos(&self.root, &photos, &scan.failed_dirs)?;
         Ok(photos.len())
     }
 

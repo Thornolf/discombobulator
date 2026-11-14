@@ -93,7 +93,7 @@ fn is_skipped_dir(name: &str) -> bool {
 #[derive(Debug, Default)]
 pub struct Scan {
     pub sources: Vec<Source>,
-    pub errors: usize,
+    pub failed_dirs: Vec<PathBuf>,
 }
 
 fn stamp(entry: &walkdir::DirEntry) -> Option<FileStamp> {
@@ -139,7 +139,7 @@ pub fn scan(root: &Path) -> io::Result<Scan> {
     std::fs::read_dir(root)?;
     type Group = (Vec<FileStamp>, Vec<FileStamp>, String);
     let mut groups: BTreeMap<(PathBuf, String), Group> = BTreeMap::new();
-    let mut errors = 0;
+    let mut failed_dirs: Vec<PathBuf> = Vec::new();
     let walker = WalkDir::new(root)
         .follow_links(false)
         .sort_by_file_name()
@@ -150,9 +150,14 @@ pub fn scan(root: &Path) -> io::Result<Scan> {
                 || !is_skipped_dir(&entry.file_name().to_string_lossy())
         });
     for entry in walker {
-        let Ok(entry) = entry else {
-            errors += 1;
-            continue;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                if let Some(path) = error.path() {
+                    failed_dirs.push(path.to_path_buf());
+                }
+                continue;
+            }
         };
         if !entry.file_type().is_file() {
             continue;
@@ -163,7 +168,7 @@ pub fn scan(root: &Path) -> io::Result<Scan> {
             continue;
         };
         let Some(file) = stamp(&entry) else {
-            errors += 1;
+            failed_dirs.push(dir.to_path_buf());
             continue;
         };
         let stem = stem.to_string_lossy().into_owned();
@@ -190,7 +195,10 @@ pub fn scan(root: &Path) -> io::Result<Scan> {
         sources.extend(rafs.map(|file| single(&dir, &stem, Kind::Raf, file)));
         sources.extend(jpgs.map(|file| single(&dir, &stem, Kind::Jpg, file)));
     }
-    Ok(Scan { sources, errors })
+    Ok(Scan {
+        sources,
+        failed_dirs,
+    })
 }
 
 #[cfg(test)]
