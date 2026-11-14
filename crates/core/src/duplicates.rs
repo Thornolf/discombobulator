@@ -116,9 +116,10 @@ pub fn exact_groups(library: &Library, photos: &[Photo]) -> Vec<Vec<String>> {
 }
 
 const EDGES: usize = 65;
+const NO_CHILD: u32 = u32::MAX;
 
 pub struct BkTree {
-    nodes: Vec<(u64, usize, [Option<usize>; EDGES])>,
+    nodes: Vec<(u64, usize, [u32; EDGES])>,
 }
 
 impl BkTree {
@@ -129,20 +130,23 @@ impl BkTree {
     pub fn insert(&mut self, hash: u64, item: usize) {
         let index = self.nodes.len();
         if index == 0 {
-            self.nodes.push((hash, item, [None; EDGES]));
+            self.nodes.push((hash, item, [NO_CHILD; EDGES]));
             return;
         }
         let mut current = 0;
         loop {
             let distance = hamming(self.nodes[current].0, hash) as usize;
-            match self.nodes[current].2[distance] {
-                Some(next) => current = next,
-                None => {
-                    self.nodes.push((hash, item, [None; EDGES]));
-                    self.nodes[current].2[distance] = Some(index);
-                    return;
-                }
+            let next = self.nodes[current].2[distance];
+            if next != NO_CHILD {
+                current = next as usize;
+                continue;
             }
+            let Ok(child) = u32::try_from(index) else {
+                return;
+            };
+            self.nodes.push((hash, item, [NO_CHILD; EDGES]));
+            self.nodes[current].2[distance] = child;
+            return;
         }
     }
 
@@ -160,7 +164,12 @@ impl BkTree {
             }
             let low = distance.saturating_sub(tolerance) as usize;
             let high = ((distance + tolerance) as usize).min(EDGES - 1);
-            pending.extend(children[low..=high].iter().flatten());
+            pending.extend(
+                children[low..=high]
+                    .iter()
+                    .filter(|&&child| child != NO_CHILD)
+                    .map(|&child| child as usize),
+            );
         }
         found
     }

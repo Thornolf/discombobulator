@@ -21,6 +21,7 @@ use crate::xmp;
 pub const MAX_JPEG_BYTES: u64 = 64 * 1024 * 1024;
 const PAIRED_RAF_XMP_SCAN: u64 = 512 * 1024;
 const MAX_WORKERS: usize = 8;
+const ON_DEMAND_WORKERS: usize = 2;
 const MAX_FAILURE_SAMPLE: usize = 5;
 
 #[derive(Debug, Error)]
@@ -207,6 +208,7 @@ pub struct Library {
     cache: Arc<Cache>,
     progress: Arc<Progress>,
     pool: rayon::ThreadPool,
+    on_demand: rayon::ThreadPool,
     cancelled: AtomicBool,
     scan_failures: Mutex<ScanFailures>,
     in_flight: Mutex<HashSet<String>>,
@@ -242,12 +244,17 @@ impl Library {
             .num_threads(workers())
             .build()
             .map_err(|error| LibraryError::Workers(error.to_string()))?;
+        let on_demand = rayon::ThreadPoolBuilder::new()
+            .num_threads(ON_DEMAND_WORKERS)
+            .build()
+            .map_err(|error| LibraryError::Workers(error.to_string()))?;
         let library = Library {
             root,
             store,
             cache,
             progress: Arc::new(Progress::default()),
             pool,
+            on_demand,
             cancelled: AtomicBool::new(false),
             scan_failures: Mutex::new(ScanFailures::default()),
             in_flight: Mutex::new(HashSet::new()),
@@ -435,7 +442,7 @@ impl Library {
         }
         #[cfg(test)]
         self.on_demand_renders.fetch_add(1, Ordering::Relaxed);
-        let rendering = self.pool.install(|| self.render_safely(&photo));
+        let rendering = self.on_demand.install(|| self.render_safely(&photo));
         self.store.save_rendering(id, &rendering)?;
         Ok(self.cache.read(id, variant).ok())
     }
