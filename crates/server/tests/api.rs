@@ -267,6 +267,39 @@ async fn tailnet_clients_cannot_browse_or_open_folders() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn update_checks_run_only_from_the_pc_and_only_in_the_desktop_app() -> TestResult {
+    let fixture = fixture()?;
+    let (_, state) = send(&fixture.state, request("GET", "/api/state", None)?).await?;
+    assert_eq!(state["can_check_updates"], json!(false));
+    assert_eq!(state["app_version"], json!(env!("CARGO_PKG_VERSION")));
+    let (status, _) = send(&fixture.state, request("POST", "/api/update", None)?).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = Arc::clone(&checks);
+    let installed = fixture.state.update_check.set(Box::new(move || {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
+    }));
+    assert!(installed.is_ok());
+    let (_, state) = send(&fixture.state, request("GET", "/api/state", None)?).await?;
+    assert_eq!(state["can_check_updates"], json!(true));
+    let (status, _) = send(
+        &fixture.state,
+        tailnet_request("POST", "/api/update", None)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (_, state) = send(&fixture.state, tailnet_request("GET", "/api/state", None)?).await?;
+    assert_eq!(state["can_check_updates"], json!(false));
+    let (status, body) = send(&fixture.state, request("POST", "/api/update", None)?).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["started"], json!(true));
+    let (_, body) = send(&fixture.state, request("POST", "/api/update", None)?).await?;
+    assert_eq!(body["started"], json!(false));
+    assert_eq!(checks.load(std::sync::atomic::Ordering::SeqCst), 2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn opening_a_missing_folder_is_a_client_error() -> TestResult {
     let fixture = fixture()?;
     let (status, body) = send(

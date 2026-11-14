@@ -102,7 +102,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 };
                 let _ = autostart.set_checked(launcher.is_enabled().unwrap_or(false));
             }
-            "updates" => update::check_now(app),
+            "updates" => {
+                update::check_now(app);
+            }
             "quit" => app.exit(0),
             _ => {}
         })
@@ -145,6 +147,10 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
+            let handle = app.handle().clone();
+            let _ = state
+                .update_check
+                .set(Box::new(move || update::check_now(&handle)));
             start_server(Arc::clone(&state)).map_err(|error| error.to_string())?;
             configure_autostart(app.handle(), &state);
             build_tray(app.handle())?;

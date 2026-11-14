@@ -210,7 +210,9 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
   installer, attached to that release. The changelog is `CHANGELOG.md` and each release's notes.
 - Updates: the desktop app checks
   `https://github.com/Thornolf/discombobulator/releases/latest/download/latest.json` 20 s after start,
-  then every 12 h, and from the tray (**Check for updates**). A newer version opens a dialog with its
+  then every 12 h, from the tray (**Check for updates**) and from the `vX.Y.Z · Updates` button at the
+  right of the desktop header (`POST /api/update`, PC only: tailnet requests get 403 and `/api/state`
+  reports `can_check_updates: false` to them). A newer version opens a dialog with its
   release notes as plain text and **Install and restart** / **Later**. Installing runs the NSIS installer
   in passive mode and restarts the app; the library and settings are kept.
 - Updates are signed with a minisign key whose public half is in `tauri.conf.json`; an installer whose

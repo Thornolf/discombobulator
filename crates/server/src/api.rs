@@ -64,6 +64,15 @@ pub struct StateDto {
     unreadable: usize,
     can_open_folders: bool,
     decisions_seq: i64,
+    app_version: &'static str,
+    can_check_updates: bool,
+}
+
+pub const UPDATES_ON_PC_ONLY: &str = "Updates are checked from the PC.";
+
+#[derive(Serialize)]
+pub struct UpdateCheckDto {
+    started: bool,
 }
 
 pub const PHONE_CANNOT_OPEN: &str =
@@ -83,6 +92,9 @@ pub async fn state(
     let current = state.session.read().map_err(ApiError::internal)?.clone();
     Ok(Json(StateDto {
         can_open_folders: !crate::guard::came_through_tailnet(&headers),
+        app_version: env!("CARGO_PKG_VERSION"),
+        can_check_updates: state.update_check.get().is_some()
+            && !crate::guard::came_through_tailnet(&headers),
         decisions_seq: state.store.decisions_seq(),
         root: current
             .as_ref()
@@ -96,6 +108,20 @@ pub async fn state(
             .as_ref()
             .map_or(0, |session| session.library.last_scan_failures().count),
     }))
+}
+
+pub async fn check_for_updates(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<UpdateCheckDto>> {
+    if crate::guard::came_through_tailnet(&headers) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, UPDATES_ON_PC_ONLY));
+    }
+    let check = state
+        .update_check
+        .get()
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, UPDATES_ON_PC_ONLY))?;
+    Ok(Json(UpdateCheckDto { started: check() }))
 }
 
 #[derive(Deserialize)]
