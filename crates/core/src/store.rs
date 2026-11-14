@@ -237,20 +237,23 @@ impl Store {
             .collect();
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
+        let mut seq = self.decisions_seq.load(Ordering::Acquire);
         {
             let keep: std::collections::HashSet<&str> =
                 photos.iter().map(|p| p.id.as_str()).collect();
             let mut delete = transaction.prepare("DELETE FROM photos WHERE id = ?1")?;
             let mut carry = transaction.prepare(
-                "UPDATE decisions SET id = ?2 WHERE id = ?1
+                "UPDATE decisions SET id = ?2, seq = ?3 WHERE id = ?1
                  AND NOT EXISTS (SELECT 1 FROM decisions WHERE id = ?2)",
             )?;
             let mut forget = transaction.prepare("DELETE FROM decisions WHERE id = ?1")?;
             let mut unhash = transaction.prepare("DELETE FROM hashes WHERE id = ?1")?;
             for vanished in existing.iter().filter(|p| !keep.contains(p.id.as_str())) {
                 delete.execute(params![vanished.id])?;
-                if let Some(successor) = successor(vanished, photos, &known) {
-                    carry.execute(params![vanished.id, successor.id])?;
+                if let Some(successor) = successor(vanished, photos, &known)
+                    && carry.execute(params![vanished.id, successor.id, seq + 1])? > 0
+                {
+                    seq += 1;
                 }
                 forget.execute(params![vanished.id])?;
                 unhash.execute(params![vanished.id])?;
@@ -276,6 +279,7 @@ impl Store {
             }
         }
         transaction.commit()?;
+        self.decisions_seq.store(seq, Ordering::Release);
         Ok(())
     }
 
@@ -589,6 +593,21 @@ mod tests {
             store.photo(&pair.id)?.map(|p| p.decision),
             Some(Decision::default())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn carried_decision_reaches_clients_that_pull_changes() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        let jpg_only = photo("/p", "A");
+        let pair = with_raf(&jpg_only);
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&jpg_only), &[])?;
+        store.set_decision(&jpg_only.id, delete_mark(), 1)?;
+        let before = store.decisions_seq();
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&pair), &[])?;
+        let changes = store.decisions_since(before)?;
+        assert_eq!(changes.seq, before + 1);
+        assert_eq!(changes.changes, vec![(pair.id.clone(), delete_mark())]);
         Ok(())
     }
 
