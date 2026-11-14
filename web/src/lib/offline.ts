@@ -29,7 +29,11 @@ export async function downloadForOffline(
     throw new Error("This browser cannot keep photos offline");
   }
   const cache = await caches.open(photosCache);
-  await cache.add("/api/photos");
+  const list = await fetch("/api/photos", { headers: { "x-discombobulator": "1" } });
+  if (!list.ok) {
+    throw new Error("Could not download the photo list");
+  }
+  await cache.put("/api/photos", list);
   const urls = photos.flatMap((photo) => [thumbUrl(photo), previewUrl(photo)]);
   let done = 0;
   let failed = 0;
