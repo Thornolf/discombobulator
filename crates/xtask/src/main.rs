@@ -44,6 +44,12 @@ fn check_comments() -> Result<Vec<String>, String> {
         else {
             continue;
         };
+        let is_file = std::fs::symlink_metadata(&path)
+            .map(|metadata| metadata.file_type().is_file())
+            .unwrap_or(false);
+        if !is_file {
+            continue;
+        }
         let text = std::fs::read_to_string(&path)
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
         let relative = path
