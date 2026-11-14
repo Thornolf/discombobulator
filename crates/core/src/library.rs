@@ -1,8 +1,8 @@
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -20,6 +20,7 @@ use crate::xmp;
 pub const MAX_JPEG_BYTES: u64 = 64 * 1024 * 1024;
 const PAIRED_RAF_XMP_SCAN: u64 = 512 * 1024;
 const MAX_WORKERS: usize = 8;
+const MAX_FAILURE_SAMPLE: usize = 5;
 
 #[derive(Debug, Error)]
 pub enum LibraryError {
@@ -178,6 +179,21 @@ pub fn canonical_folder(path: &Path) -> Result<PathBuf, LibraryError> {
     Ok(canonical)
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ScanFailures {
+    pub count: usize,
+    pub sample: Vec<PathBuf>,
+}
+
+impl ScanFailures {
+    pub fn from_paths(paths: &[PathBuf]) -> ScanFailures {
+        ScanFailures {
+            count: paths.len(),
+            sample: paths.iter().take(MAX_FAILURE_SAMPLE).cloned().collect(),
+        }
+    }
+}
+
 fn workers() -> usize {
     std::thread::available_parallelism()
         .map_or(1, usize::from)
@@ -191,6 +207,7 @@ pub struct Library {
     progress: Arc<Progress>,
     pool: rayon::ThreadPool,
     cancelled: AtomicBool,
+    scan_failures: Mutex<ScanFailures>,
 }
 
 impl Library {
@@ -211,6 +228,7 @@ impl Library {
             progress: Arc::new(Progress::default()),
             pool,
             cancelled: AtomicBool::new(false),
+            scan_failures: Mutex::new(ScanFailures::default()),
         };
         library.rescan()?;
         Ok(library)
@@ -221,7 +239,17 @@ impl Library {
         let photos: Vec<Photo> = scan.sources.iter().map(photo_from_source).collect();
         self.store
             .replace_photos(&self.root, &photos, &scan.failed_dirs)?;
+        if let Ok(mut failures) = self.scan_failures.lock() {
+            *failures = ScanFailures::from_paths(&scan.failed_dirs);
+        }
         Ok(photos.len())
+    }
+
+    pub fn last_scan_failures(&self) -> ScanFailures {
+        self.scan_failures
+            .lock()
+            .map(|failures| failures.clone())
+            .unwrap_or_default()
     }
 
     pub fn root(&self) -> &Path {
@@ -567,6 +595,22 @@ mod tests {
         let (_dir, library) = library_with(&[("A.JPG", gradient_jpeg(40, 30, 1))])?;
         assert_eq!(library.image("0123456789abcdef0123", Variant::Thumb)?, None);
         assert_eq!(library.image("../../etc/passwd", Variant::Thumb)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn scan_failures_count_everything_and_sample_a_few() {
+        let paths: Vec<PathBuf> = (0..8).map(|n| PathBuf::from(format!("/p/{n}"))).collect();
+        let failures = ScanFailures::from_paths(&paths);
+        assert_eq!(failures.count, 8);
+        assert_eq!(failures.sample, paths[..MAX_FAILURE_SAMPLE].to_vec());
+        assert_eq!(ScanFailures::from_paths(&[]), ScanFailures::default());
+    }
+
+    #[test]
+    fn readable_folder_reports_no_scan_failures() -> Result<(), LibraryError> {
+        let (_dir, library) = library_with(&[("A.JPG", gradient_jpeg(40, 30, 1))])?;
+        assert_eq!(library.last_scan_failures(), ScanFailures::default());
         Ok(())
     }
 

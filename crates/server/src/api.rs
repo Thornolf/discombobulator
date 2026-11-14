@@ -61,6 +61,7 @@ pub struct StateDto {
     version: u64,
     processing: bool,
     progress: Option<ProgressSnapshot>,
+    unreadable: usize,
 }
 
 pub async fn state(State(state): State<Arc<AppState>>) -> ApiResult<Json<StateDto>> {
@@ -74,6 +75,9 @@ pub async fn state(State(state): State<Arc<AppState>>) -> ApiResult<Json<StateDt
             .as_ref()
             .is_some_and(|session| session.is_processing()),
         progress: current.as_ref().map(|session| session.library.progress()),
+        unreadable: current
+            .as_ref()
+            .map_or(0, |session| session.library.last_scan_failures().count),
     }))
 }
 
