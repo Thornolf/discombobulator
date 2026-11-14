@@ -1,0 +1,307 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use axum::Json;
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use discombobulator_core::library::{ProgressSnapshot, Variant};
+use discombobulator_core::model::{Decision, Photo};
+use serde::{Deserialize, Serialize};
+
+use crate::AppState;
+use crate::folders;
+use crate::session::Session;
+
+pub const LAST_FOLDER: &str = "last_folder";
+
+#[derive(Debug)]
+pub struct ApiError(StatusCode, String);
+
+impl ApiError {
+    pub fn new(status: StatusCode, message: impl Into<String>) -> ApiError {
+        ApiError(status, message.into())
+    }
+
+    fn internal(error: impl std::fmt::Display) -> ApiError {
+        ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.0, Json(serde_json::json!({ "error": self.1 }))).into_response()
+    }
+}
+
+pub type ApiResult<T> = Result<T, ApiError>;
+
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0)
+}
+
+pub fn session(state: &AppState) -> ApiResult<Arc<Session>> {
+    state
+        .session
+        .read()
+        .map_err(ApiError::internal)?
+        .clone()
+        .ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "No folder is open"))
+}
+
+#[derive(Serialize)]
+pub struct StateDto {
+    root: Option<String>,
+    version: u64,
+    processing: bool,
+    progress: Option<ProgressSnapshot>,
+}
+
+pub async fn state(State(state): State<Arc<AppState>>) -> ApiResult<Json<StateDto>> {
+    let current = state.session.read().map_err(ApiError::internal)?.clone();
+    Ok(Json(StateDto {
+        root: current
+            .as_ref()
+            .map(|session| session.library.root().to_string_lossy().into_owned()),
+        version: state.version.load(Ordering::Relaxed),
+        processing: current
+            .as_ref()
+            .is_some_and(|session| session.is_processing()),
+        progress: current.as_ref().map(|session| session.library.progress()),
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct FolderQuery {
+    path: Option<String>,
+}
+
+pub async fn folders(Query(query): Query<FolderQuery>) -> ApiResult<Json<folders::Listing>> {
+    match query.path.filter(|path| !path.is_empty()) {
+        None => Ok(Json(folders::Listing {
+            path: None,
+            parent: None,
+            entries: folders::roots(),
+        })),
+        Some(path) => tokio::task::spawn_blocking(move || folders::list(&PathBuf::from(path)))
+            .await
+            .map_err(ApiError::internal)?
+            .map(Json)
+            .map_err(|error| ApiError::new(StatusCode::NOT_FOUND, error.to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct OpenRequest {
+    path: String,
+}
+
+pub fn open_folder(state: &AppState, path: PathBuf) -> ApiResult<()> {
+    let session = Session::open(
+        &path,
+        Arc::clone(&state.store),
+        Arc::clone(&state.cache),
+        Arc::clone(&state.version),
+    )
+    .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
+    let root = session.library.root().to_string_lossy().into_owned();
+    *state.session.write().map_err(ApiError::internal)? = Some(Arc::new(session));
+    state
+        .store
+        .set_setting(LAST_FOLDER, &root)
+        .map_err(ApiError::internal)?;
+    Ok(())
+}
+
+pub async fn open(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<OpenRequest>,
+) -> ApiResult<Json<StateDto>> {
+    let path = PathBuf::from(request.path);
+    let opener = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || -> ApiResult<()> {
+        let runtime = tokio::runtime::Handle::current();
+        let _guard = runtime.enter();
+        open_folder(&opener, path)
+    })
+    .await
+    .map_err(ApiError::internal)??;
+    self::state(State(state)).await
+}
+
+#[derive(Serialize)]
+pub struct PhotoDto {
+    id: String,
+    name: String,
+    folder: String,
+    time_ms: i64,
+    captured: bool,
+    dhash: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    raf: bool,
+    jpg: bool,
+    size: u64,
+    error: Option<String>,
+    version: String,
+    camera_rating: Option<u8>,
+    decision: Decision,
+}
+
+fn photo_dto(photo: &Photo, root: &std::path::Path) -> PhotoDto {
+    PhotoDto {
+        id: photo.id.clone(),
+        name: photo.name(),
+        folder: photo
+            .dir
+            .strip_prefix(root)
+            .map(|relative| relative.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        time_ms: photo.time_ms(),
+        captured: photo.capture_ms.is_some(),
+        dhash: photo.dhash.map(|hash| format!("{hash:016x}")),
+        width: photo.width,
+        height: photo.height,
+        raf: photo.raf.is_some(),
+        jpg: photo.jpg.is_some(),
+        size: photo.size,
+        error: photo.error.clone(),
+        version: photo.fingerprint.clone(),
+        camera_rating: photo.camera_rating,
+        decision: photo.effective_decision(),
+    }
+}
+
+pub async fn photos(State(state): State<Arc<AppState>>) -> ApiResult<Json<Vec<PhotoDto>>> {
+    let session = session(&state)?;
+    tokio::task::spawn_blocking(move || {
+        let library = &session.library;
+        let photos = library.photos().map_err(ApiError::internal)?;
+        Ok(Json(
+            photos
+                .iter()
+                .map(|photo| photo_dto(photo, library.root()))
+                .collect(),
+        ))
+    })
+    .await
+    .map_err(ApiError::internal)?
+}
+
+fn image_response(bytes: Vec<u8>) -> Response {
+    let mut response = bytes.into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg"));
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=31536000, immutable"),
+    );
+    response
+}
+
+fn valid_id(id: &str) -> bool {
+    discombobulator_core::library::is_photo_id(id)
+}
+
+async fn image(state: Arc<AppState>, id: String, variant: Variant) -> ApiResult<Response> {
+    if !valid_id(&id) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "Invalid photo id"));
+    }
+    let session = session(&state)?;
+    let bytes = tokio::task::spawn_blocking(move || session.library.image(&id, variant))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::internal)?;
+    bytes
+        .map(image_response)
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "No image for this photo"))
+}
+
+pub async fn thumb(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Response> {
+    image(state, id, Variant::Thumb).await
+}
+
+pub async fn preview(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<Response> {
+    image(state, id, Variant::Preview).await
+}
+
+#[derive(Deserialize)]
+pub struct DecisionChange {
+    id: String,
+    decision: Decision,
+}
+
+#[derive(Deserialize)]
+pub struct DecisionBatch {
+    changes: Vec<DecisionChange>,
+}
+
+#[derive(Serialize)]
+pub struct BatchResult {
+    applied: usize,
+    missing: Vec<String>,
+}
+
+pub const MAX_BATCH: usize = 100_000;
+
+pub fn apply_decisions(state: &AppState, changes: &[DecisionChange]) -> ApiResult<BatchResult> {
+    if changes.len() > MAX_BATCH {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Too many changes",
+        ));
+    }
+    if changes.iter().any(|change| change.decision.rating > 5) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Rating must be 0 to 5",
+        ));
+    }
+    let session = session(state)?;
+    let now = now_ms();
+    let mut result = BatchResult {
+        applied: 0,
+        missing: Vec::new(),
+    };
+    for change in changes {
+        let known = valid_id(&change.id)
+            && session
+                .library
+                .photo(&change.id)
+                .map_err(ApiError::internal)?
+                .is_some();
+        if !known {
+            result.missing.push(change.id.clone());
+            continue;
+        }
+        state
+            .store
+            .set_decision(&change.id, change.decision, now)
+            .map_err(ApiError::internal)?;
+        result.applied += 1;
+    }
+    Ok(result)
+}
+
+pub async fn decisions(
+    State(state): State<Arc<AppState>>,
+    Json(batch): Json<DecisionBatch>,
+) -> ApiResult<Json<BatchResult>> {
+    let worker = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || apply_decisions(&worker, &batch.changes))
+        .await
+        .map_err(ApiError::internal)?
+        .map(Json)
+}

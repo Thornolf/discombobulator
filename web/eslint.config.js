@@ -39,6 +39,10 @@ export default ts.config(
     },
   },
   {
+    files: ["src/lib/library.svelte.ts"],
+    rules: { "svelte/prefer-svelte-reactivity": "off" },
+  },
+  {
     plugins: { local: { rules: { "no-comments": noComments } } },
     rules: {
       "local/no-comments": "error",

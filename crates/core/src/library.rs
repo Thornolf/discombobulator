@@ -162,6 +162,7 @@ fn photo_from_source(source: &Source) -> Photo {
         height: None,
         error: None,
         decision: Decision::default(),
+        has_decision: false,
     }
 }
 

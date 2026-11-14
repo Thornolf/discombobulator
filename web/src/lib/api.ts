@@ -1,0 +1,48 @@
+import type { DecisionChange, FolderListing, Photo, ServerState } from "./types";
+
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      "x-discombobulator": "1",
+      ...init.headers,
+    },
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new ApiError(response.status, body?.error ?? response.statusText);
+  }
+  return (await response.json()) as T;
+}
+
+export const api = {
+  state: () => request<ServerState>("/api/state"),
+  folders: (path?: string) =>
+    request<FolderListing>(`/api/folders${path ? `?path=${encodeURIComponent(path)}` : ""}`),
+  open: (path: string) =>
+    request<ServerState>("/api/library", { method: "POST", body: JSON.stringify({ path }) }),
+  photos: () => request<Photo[]>("/api/photos"),
+  decide: (changes: DecisionChange[]) =>
+    request<{ applied: number; missing: string[] }>("/api/decisions", {
+      method: "POST",
+      body: JSON.stringify({ changes }),
+    }),
+};
+
+export function thumbUrl(photo: Photo): string {
+  return `/api/photos/${photo.id}/thumb?v=${photo.version}`;
+}
+
+export function previewUrl(photo: Photo): string {
+  return `/api/photos/${photo.id}/preview?v=${photo.version}`;
+}
