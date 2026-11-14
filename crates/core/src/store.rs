@@ -100,6 +100,29 @@ fn photo_from_row(row: &Row<'_>) -> rusqlite::Result<Photo> {
     })
 }
 
+fn successor<'a>(
+    vanished: &Photo,
+    photos: &'a [Photo],
+    known: &std::collections::HashSet<String>,
+) -> Option<&'a Photo> {
+    let old_files: Vec<&Path> = vanished
+        .raf
+        .iter()
+        .chain(vanished.jpg.iter())
+        .map(PathBuf::as_path)
+        .collect();
+    let mut candidates = photos.iter().filter(|photo| {
+        !known.contains(&photo.id)
+            && photo
+                .raf
+                .iter()
+                .chain(photo.jpg.iter())
+                .any(|file| old_files.contains(&file.as_path()))
+    });
+    let first = candidates.next()?;
+    candidates.next().is_none().then_some(first)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rendering {
     pub fingerprint: String,
@@ -185,11 +208,12 @@ impl Store {
         photos: &[Photo],
         unreadable: &[PathBuf],
     ) -> Result<(), StoreError> {
-        let existing: Vec<String> = self
-            .photos_under(root)?
+        let all_existing = self.photos_under(root)?;
+        let known: std::collections::HashSet<String> =
+            all_existing.iter().map(|photo| photo.id.clone()).collect();
+        let existing: Vec<Photo> = all_existing
             .into_iter()
             .filter(|photo| !unreadable.iter().any(|dir| photo.dir.starts_with(dir)))
-            .map(|photo| photo.id)
             .collect();
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
@@ -197,10 +221,19 @@ impl Store {
             let keep: std::collections::HashSet<&str> =
                 photos.iter().map(|p| p.id.as_str()).collect();
             let mut delete = transaction.prepare("DELETE FROM photos WHERE id = ?1")?;
+            let mut carry = transaction.prepare(
+                "UPDATE decisions SET id = ?2 WHERE id = ?1
+                 AND NOT EXISTS (SELECT 1 FROM decisions WHERE id = ?2)",
+            )?;
             let mut forget = transaction.prepare("DELETE FROM decisions WHERE id = ?1")?;
-            for id in existing.iter().filter(|id| !keep.contains(id.as_str())) {
-                delete.execute(params![id])?;
-                forget.execute(params![id])?;
+            let mut unhash = transaction.prepare("DELETE FROM hashes WHERE id = ?1")?;
+            for vanished in existing.iter().filter(|p| !keep.contains(p.id.as_str())) {
+                delete.execute(params![vanished.id])?;
+                if let Some(successor) = successor(vanished, photos, &known) {
+                    carry.execute(params![vanished.id, successor.id])?;
+                }
+                forget.execute(params![vanished.id])?;
+                unhash.execute(params![vanished.id])?;
             }
             let mut upsert = transaction.prepare(
                 "INSERT INTO photos (id, dir, stem, raf, jpg, size, modified_ms, fingerprint)
@@ -404,6 +437,110 @@ mod tests {
         Ok(())
     }
 
+    fn delete_mark() -> Decision {
+        Decision {
+            mark: Some(Mark::Delete),
+            favorite: true,
+            rating: 2,
+        }
+    }
+
+    fn with_raf(jpg_only: &Photo) -> Photo {
+        let raf = jpg_only.dir.join(format!("{}.RAF", jpg_only.stem));
+        Photo {
+            id: crate::scan::photo_id(&jpg_only.dir, &format!("{}.RAF", jpg_only.stem)),
+            raf: Some(raf),
+            ..jpg_only.clone()
+        }
+    }
+
+    #[test]
+    fn decision_follows_a_jpg_when_its_raf_appears() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        let jpg_only = photo("/p", "A");
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&jpg_only), &[])?;
+        store.set_decision(&jpg_only.id, delete_mark(), 1)?;
+        let pair = with_raf(&jpg_only);
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&pair), &[])?;
+        assert!(store.photo(&jpg_only.id)?.is_none());
+        assert_eq!(
+            store.photo(&pair.id)?.map(|p| p.decision),
+            Some(delete_mark())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decision_follows_a_pair_when_its_raf_disappears() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        let jpg_only = photo("/p", "A");
+        let pair = with_raf(&jpg_only);
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&pair), &[])?;
+        store.set_decision(&pair.id, delete_mark(), 1)?;
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&jpg_only), &[])?;
+        assert_eq!(
+            store.photo(&jpg_only.id)?.map(|p| p.decision),
+            Some(delete_mark())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decision_never_moves_onto_a_photo_that_already_existed() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        let dir = PathBuf::from("/p");
+        let pair = Photo {
+            id: crate::scan::photo_id(&dir, "A.RAF"),
+            raf: Some(dir.join("A.RAF")),
+            jpg: Some(dir.join("A.JPG")),
+            ..photo("/p", "A")
+        };
+        let extra = Photo {
+            id: crate::scan::photo_id(&dir, "A.jpeg"),
+            jpg: Some(dir.join("A.jpeg")),
+            ..photo("/p", "A")
+        };
+        store.replace_photos(&dir, &[pair.clone(), extra.clone()], &[])?;
+        store.set_decision(&extra.id, delete_mark(), 1)?;
+        let repaired = Photo {
+            jpg: Some(dir.join("A.jpeg")),
+            ..pair.clone()
+        };
+        store.replace_photos(&dir, std::slice::from_ref(&repaired), &[])?;
+        assert_eq!(store.photo(&pair.id)?.map(|p| p.has_decision), Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn decision_never_moves_to_a_photo_without_a_shared_file() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        let a = photo("/p", "A");
+        let b = photo("/p", "B");
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&a), &[])?;
+        store.set_decision(&a.id, delete_mark(), 1)?;
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&b), &[])?;
+        assert_eq!(store.photo(&b.id)?.map(|p| p.has_decision), Some(false));
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&a), &[])?;
+        assert_eq!(store.photo(&a.id)?.map(|p| p.has_decision), Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn carried_decision_does_not_overwrite_an_existing_one() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        let jpg_only = photo("/p", "A");
+        let pair = with_raf(&jpg_only);
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&jpg_only), &[])?;
+        store.set_decision(&jpg_only.id, delete_mark(), 1)?;
+        store.set_decision(&pair.id, Decision::default(), 2)?;
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&pair), &[])?;
+        assert_eq!(
+            store.photo(&pair.id)?.map(|p| p.decision),
+            Some(Decision::default())
+        );
+        Ok(())
+    }
+
     #[test]
     fn unreadable_folders_are_not_pruned() -> Result<(), StoreError> {
         let store = Store::in_memory()?;
@@ -493,6 +630,23 @@ mod tests {
         store.save_hashes("id", "v1", &hashes)?;
         assert_eq!(store.hashes("id", "v1")?, Some(hashes));
         assert_eq!(store.hashes("id", "v2")?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn removed_photo_forgets_its_hashes() -> Result<(), StoreError> {
+        let store = Store::in_memory()?;
+        let p = photo("/p", "A");
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), &[])?;
+        let hashes = FileHashes {
+            quick: "q".into(),
+            full: None,
+        };
+        store.save_hashes(&p.id, &p.fingerprint, &hashes)?;
+        store.replace_photos(Path::new("/p"), std::slice::from_ref(&p), &[])?;
+        assert_eq!(store.hashes(&p.id, &p.fingerprint)?, Some(hashes));
+        store.replace_photos(Path::new("/p"), &[], &[])?;
+        assert_eq!(store.hashes(&p.id, &p.fingerprint)?, None);
         Ok(())
     }
 

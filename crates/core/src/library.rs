@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -20,6 +21,8 @@ use crate::xmp;
 pub const MAX_JPEG_BYTES: u64 = 64 * 1024 * 1024;
 const PAIRED_RAF_XMP_SCAN: u64 = 512 * 1024;
 const MAX_WORKERS: usize = 8;
+const ON_DEMAND_WORKERS: usize = 2;
+const MAX_FAILURE_SAMPLE: usize = 5;
 
 #[derive(Debug, Error)]
 pub enum LibraryError {
@@ -178,6 +181,21 @@ pub fn canonical_folder(path: &Path) -> Result<PathBuf, LibraryError> {
     Ok(canonical)
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ScanFailures {
+    pub count: usize,
+    pub sample: Vec<PathBuf>,
+}
+
+impl ScanFailures {
+    pub fn from_paths(paths: &[PathBuf]) -> ScanFailures {
+        ScanFailures {
+            count: paths.len(),
+            sample: paths.iter().take(MAX_FAILURE_SAMPLE).cloned().collect(),
+        }
+    }
+}
+
 fn workers() -> usize {
     std::thread::available_parallelism()
         .map_or(1, usize::from)
@@ -190,7 +208,29 @@ pub struct Library {
     cache: Arc<Cache>,
     progress: Arc<Progress>,
     pool: rayon::ThreadPool,
+    on_demand: rayon::ThreadPool,
     cancelled: AtomicBool,
+    scan_failures: Mutex<ScanFailures>,
+    in_flight: Mutex<HashSet<String>>,
+    render_done: Condvar,
+    #[cfg(test)]
+    on_demand_renders: AtomicUsize,
+}
+
+struct InFlight<'a> {
+    library: &'a Library,
+    id: String,
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.library
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.id);
+        self.library.render_done.notify_all();
+    }
 }
 
 impl Library {
@@ -204,13 +244,23 @@ impl Library {
             .num_threads(workers())
             .build()
             .map_err(|error| LibraryError::Workers(error.to_string()))?;
+        let on_demand = rayon::ThreadPoolBuilder::new()
+            .num_threads(ON_DEMAND_WORKERS)
+            .build()
+            .map_err(|error| LibraryError::Workers(error.to_string()))?;
         let library = Library {
             root,
             store,
             cache,
             progress: Arc::new(Progress::default()),
             pool,
+            on_demand,
             cancelled: AtomicBool::new(false),
+            scan_failures: Mutex::new(ScanFailures::default()),
+            in_flight: Mutex::new(HashSet::new()),
+            render_done: Condvar::new(),
+            #[cfg(test)]
+            on_demand_renders: AtomicUsize::new(0),
         };
         library.rescan()?;
         Ok(library)
@@ -221,7 +271,17 @@ impl Library {
         let photos: Vec<Photo> = scan.sources.iter().map(photo_from_source).collect();
         self.store
             .replace_photos(&self.root, &photos, &scan.failed_dirs)?;
+        if let Ok(mut failures) = self.scan_failures.lock() {
+            *failures = ScanFailures::from_paths(&scan.failed_dirs);
+        }
         Ok(photos.len())
+    }
+
+    pub fn last_scan_failures(&self) -> ScanFailures {
+        self.scan_failures
+            .lock()
+            .map(|failures| failures.clone())
+            .unwrap_or_default()
     }
 
     pub fn root(&self) -> &Path {
@@ -242,12 +302,8 @@ impl Library {
 
     pub fn photos(&self) -> Result<Vec<Photo>, LibraryError> {
         let mut photos = self.store.photos_under(&self.root)?;
-        photos.sort_by(|a, b| {
-            a.time_ms()
-                .cmp(&b.time_ms())
-                .then_with(|| a.dir.cmp(&b.dir))
-                .then_with(|| a.stem.cmp(&b.stem))
-        });
+        photos.sort_by(|a, b| a.dir.cmp(&b.dir).then_with(|| a.stem.cmp(&b.stem)));
+        photos.sort_by_cached_key(Photo::time_ms);
         Ok(photos)
     }
 
@@ -374,17 +430,49 @@ impl Library {
         let Some(photo) = self.photo(id)? else {
             return Ok(None);
         };
-        if photo.is_processed() {
-            if photo.error.is_some() {
-                return Ok(None);
-            }
-            if let Ok(bytes) = self.cache.read(id, variant) {
-                return Ok(Some(bytes));
-            }
+        if let Some(served) = self.cached_image(&photo, variant) {
+            return Ok(served);
         }
-        let rendering = self.render_safely(&photo);
+        let _claim = self.claim(id);
+        let Some(photo) = self.photo(id)? else {
+            return Ok(None);
+        };
+        if let Some(served) = self.cached_image(&photo, variant) {
+            return Ok(served);
+        }
+        #[cfg(test)]
+        self.on_demand_renders.fetch_add(1, Ordering::Relaxed);
+        let rendering = self.on_demand.install(|| self.render_safely(&photo));
         self.store.save_rendering(id, &rendering)?;
         Ok(self.cache.read(id, variant).ok())
+    }
+
+    fn cached_image(&self, photo: &Photo, variant: Variant) -> Option<Option<Vec<u8>>> {
+        if !photo.is_processed() {
+            return None;
+        }
+        if photo.error.is_some() {
+            return Some(None);
+        }
+        self.cache.read(&photo.id, variant).ok().map(Some)
+    }
+
+    fn claim(&self, id: &str) -> InFlight<'_> {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        while in_flight.contains(id) {
+            in_flight = self
+                .render_done
+                .wait(in_flight)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        in_flight.insert(id.to_owned());
+        InFlight {
+            library: self,
+            id: id.to_owned(),
+        }
     }
 }
 
@@ -563,10 +651,45 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_requests_for_one_image_render_it_once() -> Result<(), LibraryError> {
+        let (_dir, library) = library_with(&[("A.JPG", gradient_jpeg(1200, 900, 1))])?;
+        let id = library.photos()?.remove(0).id;
+        let results: Vec<Option<Vec<u8>>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..6)
+                .map(|_| scope.spawn(|| library.image(&id, Variant::Thumb)))
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|handle| handle.join().ok())
+                .collect::<Result<_, _>>()
+        })?;
+        assert_eq!(results.len(), 6);
+        assert!(results.iter().all(|bytes| bytes.is_some()));
+        assert_eq!(library.on_demand_renders.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[test]
     fn unknown_or_malformed_ids_have_no_image() -> Result<(), LibraryError> {
         let (_dir, library) = library_with(&[("A.JPG", gradient_jpeg(40, 30, 1))])?;
         assert_eq!(library.image("0123456789abcdef0123", Variant::Thumb)?, None);
         assert_eq!(library.image("../../etc/passwd", Variant::Thumb)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn scan_failures_count_everything_and_sample_a_few() {
+        let paths: Vec<PathBuf> = (0..8).map(|n| PathBuf::from(format!("/p/{n}"))).collect();
+        let failures = ScanFailures::from_paths(&paths);
+        assert_eq!(failures.count, 8);
+        assert_eq!(failures.sample, paths[..MAX_FAILURE_SAMPLE].to_vec());
+        assert_eq!(ScanFailures::from_paths(&[]), ScanFailures::default());
+    }
+
+    #[test]
+    fn readable_folder_reports_no_scan_failures() -> Result<(), LibraryError> {
+        let (_dir, library) = library_with(&[("A.JPG", gradient_jpeg(40, 30, 1))])?;
+        assert_eq!(library.last_scan_failures(), ScanFailures::default());
         Ok(())
     }
 

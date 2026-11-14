@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -76,7 +78,8 @@ impl Photo {
     }
 
     pub fn time_ms(&self) -> i64 {
-        self.capture_ms.unwrap_or(self.modified_ms)
+        self.capture_ms
+            .unwrap_or_else(|| local_wall_clock_ms(self.modified_ms))
     }
 
     pub fn is_processed(&self) -> bool {
@@ -90,5 +93,41 @@ impl Photo {
             .and_then(|path| path.file_name())
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.stem.clone())
+    }
+}
+
+pub fn shift_by_offset(utc_ms: i64, offset_seconds: i32) -> i64 {
+    utc_ms.saturating_add(i64::from(offset_seconds) * 1000)
+}
+
+pub fn local_wall_clock_ms(utc_ms: i64) -> i64 {
+    let offset_seconds = Timestamp::from_millisecond(utc_ms)
+        .map(|timestamp| TimeZone::system().to_offset(timestamp).seconds())
+        .unwrap_or(0);
+    shift_by_offset(utc_ms, offset_seconds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::parse_exif_datetime;
+
+    #[test]
+    fn modified_time_is_shifted_into_local_wall_clock() {
+        let paris_summer = 2 * 3600;
+        let utc_ms = 1_791_787_330_000;
+        let shifted = shift_by_offset(utc_ms, paris_summer);
+        assert_eq!(
+            Some(shifted / 1000),
+            parse_exif_datetime("2026:10:12 08:42:10")
+        );
+        assert_eq!(shift_by_offset(utc_ms, -5 * 3600), utc_ms - 18_000_000);
+        assert_eq!(shift_by_offset(i64::MAX, 3600), i64::MAX);
+    }
+
+    #[test]
+    fn system_offset_shift_stays_within_a_day() {
+        let utc_ms = 1_791_787_330_000;
+        assert!((local_wall_clock_ms(utc_ms) - utc_ms).abs() <= 26 * 3_600_000);
     }
 }

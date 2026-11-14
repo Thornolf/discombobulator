@@ -97,29 +97,29 @@ pub fn exact_groups(library: &Library, photos: &[Photo]) -> Vec<Vec<String>> {
         .par_iter()
         .filter_map(|photo| file_len(photo).map(|len| (len, photo)))
         .collect();
-    let mut result = Vec::new();
-    for same_size in groups_by(sized) {
-        let quick: Vec<(String, &Photo)> = same_size
-            .par_iter()
-            .filter_map(|photo| hashes_for(library, photo, false).map(|h| (h.quick, *photo)))
-            .collect();
-        for same_quick in groups_by(quick) {
-            let full: Vec<(String, &Photo)> = same_quick
-                .par_iter()
-                .filter_map(|photo| {
-                    hashes_for(library, photo, true).and_then(|h| h.full.map(|full| (full, *photo)))
-                })
-                .collect();
-            for same in groups_by(full) {
-                result.push(same.into_iter().map(|photo| photo.id.clone()).collect());
-            }
-        }
-    }
-    result
+    let same_size: Vec<&Photo> = groups_by(sized).into_iter().flatten().collect();
+    let quick: Vec<(String, &Photo)> = same_size
+        .par_iter()
+        .filter_map(|photo| hashes_for(library, photo, false).map(|h| (h.quick, *photo)))
+        .collect();
+    let same_quick: Vec<&Photo> = groups_by(quick).into_iter().flatten().collect();
+    let full: Vec<(String, &Photo)> = same_quick
+        .par_iter()
+        .filter_map(|photo| {
+            hashes_for(library, photo, true).and_then(|h| h.full.map(|full| (full, *photo)))
+        })
+        .collect();
+    groups_by(full)
+        .into_iter()
+        .map(|same| same.into_iter().map(|photo| photo.id.clone()).collect())
+        .collect()
 }
 
+const EDGES: usize = 65;
+const NO_CHILD: u32 = u32::MAX;
+
 pub struct BkTree {
-    nodes: Vec<(u64, usize, HashMap<u32, usize>)>,
+    nodes: Vec<(u64, usize, [u32; EDGES])>,
 }
 
 impl BkTree {
@@ -128,22 +128,25 @@ impl BkTree {
     }
 
     pub fn insert(&mut self, hash: u64, item: usize) {
-        if self.nodes.is_empty() {
-            self.nodes.push((hash, item, HashMap::new()));
+        let index = self.nodes.len();
+        if index == 0 {
+            self.nodes.push((hash, item, [NO_CHILD; EDGES]));
             return;
         }
         let mut current = 0;
         loop {
-            let distance = hamming(self.nodes[current].0, hash);
-            match self.nodes[current].2.get(&distance) {
-                Some(&next) => current = next,
-                None => {
-                    let index = self.nodes.len();
-                    self.nodes.push((hash, item, HashMap::new()));
-                    self.nodes[current].2.insert(distance, index);
-                    return;
-                }
+            let distance = hamming(self.nodes[current].0, hash) as usize;
+            let next = self.nodes[current].2[distance];
+            if next != NO_CHILD {
+                current = next as usize;
+                continue;
             }
+            let Ok(child) = u32::try_from(index) else {
+                return;
+            };
+            self.nodes.push((hash, item, [NO_CHILD; EDGES]));
+            self.nodes[current].2[distance] = child;
+            return;
         }
     }
 
@@ -159,13 +162,13 @@ impl BkTree {
             if distance <= tolerance {
                 found.push(*item);
             }
-            let low = distance.saturating_sub(tolerance);
-            let high = distance + tolerance;
+            let low = distance.saturating_sub(tolerance) as usize;
+            let high = ((distance + tolerance) as usize).min(EDGES - 1);
             pending.extend(
-                children
+                children[low..=high]
                     .iter()
-                    .filter(|(edge, _)| (low..=high).contains(*edge))
-                    .map(|(_, child)| *child),
+                    .filter(|&&child| child != NO_CHILD)
+                    .map(|&child| child as usize),
             );
         }
         found
@@ -309,6 +312,55 @@ mod tests {
             ]
         );
         assert!(similar_groups(&hashes, 0).is_empty());
+    }
+
+    #[test]
+    fn identical_hashes_group_at_distance_zero() {
+        let hashes = vec![
+            ("a".to_owned(), 0xABCDu64),
+            ("b".to_owned(), 0xABCD),
+            ("c".to_owned(), 0xABCD),
+            ("d".to_owned(), 0xABCC),
+        ];
+        assert_eq!(
+            similar_groups(&hashes, 0),
+            vec![vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]]
+        );
+        let mut tree = BkTree::new();
+        for (index, (_, hash)) in hashes.iter().enumerate() {
+            tree.insert(*hash, index);
+        }
+        let mut exact = tree.within(0xABCD, 0);
+        exact.sort_unstable();
+        assert_eq!(exact, vec![0, 1, 2]);
+        let mut all = tree.within(0xABCD, MAX_TOLERANCE);
+        all.sort_unstable();
+        assert_eq!(all, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn changed_file_is_hashed_again() -> Result<(), LibraryError> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().join("photos");
+        std::fs::create_dir_all(root.join("backup"))?;
+        let mut bytes = vec![7u8; 200_000];
+        std::fs::write(root.join("A.JPG"), &bytes)?;
+        std::fs::write(root.join("backup").join("A.JPG"), &bytes)?;
+        let store = Arc::new(Store::in_memory()?);
+        let cache = Arc::new(Cache::new(dir.path().join("cache"))?);
+        let library = Library::open(&root, store, cache)?;
+        assert_eq!(exact_groups(&library, &library.photos()?).len(), 1);
+        bytes[100_000] = 8;
+        let copy = root.join("backup").join("A.JPG");
+        std::fs::write(&copy, &bytes)?;
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(&copy)?
+            .set_modified(later)?;
+        library.rescan()?;
+        assert!(exact_groups(&library, &library.photos()?).is_empty());
+        Ok(())
     }
 
     #[test]

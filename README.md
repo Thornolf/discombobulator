@@ -75,3 +75,6 @@ Windows installer to the GitHub release.
 ## License
 
 [MIT](LICENSE)
+
+Preview encoding uses the `jpeg-encoder` crate, which is based in part on the work of the Independent
+JPEG Group.

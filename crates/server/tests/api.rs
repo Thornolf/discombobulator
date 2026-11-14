@@ -20,11 +20,7 @@ fn jpeg() -> Vec<u8> {
     let image = image::RgbImage::from_fn(64, 48, |x, y| {
         image::Rgb([(x * 4) as u8, (y * 5) as u8, 90])
     });
-    let mut bytes = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new(&mut bytes)
-        .encode_image(&image)
-        .map(|()| bytes)
-        .unwrap_or_default()
+    discombobulator_core::imaging::encode(&image).unwrap_or_default()
 }
 
 fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
@@ -91,6 +87,8 @@ async fn opens_folder_lists_photos_and_serves_thumbs() -> TestResult {
     let photos = open_and_wait(&fixture).await?;
     assert_eq!(photos.len(), 2);
     assert_eq!(photos[0]["name"], json!("DSCF0001.JPG"));
+    let (_, state) = send(&fixture.state, request("GET", "/api/state", None)?).await?;
+    assert_eq!(state["unreadable"], json!(0));
     let id = photos[0]["id"].as_str().unwrap_or_default().to_owned();
     let response = router(Arc::clone(&fixture.state))
         .oneshot(request("GET", &format!("/api/photos/{id}/thumb"), None)?)
