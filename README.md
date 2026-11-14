@@ -21,6 +21,9 @@ Tailscale.
 3. Discombobulator starts with Windows in the tray. Closing the window keeps it running so your phone can
    reach it; use **Quit** in the tray menu to stop it, and untick **Start with Windows** there to turn
    autostart off.
+4. Updates come by themselves: when a new version is out, Discombobulator shows what changed and offers
+   **Install and restart**. You can also use **Check for updates** in the tray menu. What changed in each
+   version is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Use
 

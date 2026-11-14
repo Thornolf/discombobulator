@@ -207,7 +207,17 @@ HTTPS from the tailnet to localhost, so the app is never exposed on the LAN or t
 
 - Conventional Commits on `main`; release-please opens a release PR with the changelog and version bump.
 - Merging the release PR tags `vX.Y.Z`, creates the GitHub release and builds the Windows NSIS
-  installer, attached to that release.
+  installer, attached to that release. The changelog is `CHANGELOG.md` and each release's notes.
+- Updates: the desktop app checks
+  `https://github.com/Thornolf/discombobulator/releases/latest/download/latest.json` 20 s after start,
+  then every 12 h, and from the tray (**Check for updates**). A newer version opens a dialog with its
+  release notes as plain text and **Install and restart** / **Later**. Installing runs the NSIS installer
+  in passive mode and restarts the app; the library and settings are kept.
+- Updates are signed with a minisign key whose public half is in `tauri.conf.json`; an installer whose
+  signature does not verify, or whose signed version differs from the announced one, is refused
+  (`requireSignedVersion`). The release workflow signs with the `TAURI_SIGNING_PRIVATE_KEY` secret and
+  publishes `latest.json`; without the secret it still releases the installer, but installed apps are
+  not offered it.
 
 ## Prior art
 

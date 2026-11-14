@@ -39,6 +39,19 @@
     "copyright": "Copyright (c) 2026 Thornolf. MIT License.",
     "category": "Photography",
     "shortDescription": "Fast, keyboard-first photo culling for Fujifilm RAF + JPG",
-    "longDescription": "Cull Fujifilm RAF + JPG photos with one key per decision, hand picks to Lightroom through XMP sidecars, and swipe through them on an iPhone over Tailscale."
+    "longDescription": "Cull Fujifilm RAF + JPG photos with one key per decision, hand picks to Lightroom through XMP sidecars, and swipe through them on an iPhone over Tailscale.",
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZGRTQyQjgwMkZCNDJFRDMKUldUVExyUXZnQ3ZrLzEvUzZEM1BnNmpYODNGQTk5RWF1UlRjK0JUM29wYURuUndrTU5OUE5DaEQK",
+      "endpoints": [
+        "https://github.com/Thornolf/discombobulator/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      },
+      "requireSignedVersion": true
+    }
   }
 }

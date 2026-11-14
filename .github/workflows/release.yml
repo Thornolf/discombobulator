@@ -46,11 +46,23 @@ jobs:
       - run: rustup show
       - name: Build installer
         working-directory: crates/desktop
-        run: ../../web/node_modules/.bin/tauri build --bundles nsis
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            ../../web/node_modules/.bin/tauri build --bundles nsis
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: this release will not reach installed apps through the updater"
+            ../../web/node_modules/.bin/tauri build --bundles nsis --config tauri.unsigned.conf.json
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: installer
-          path: target/release/bundle/nsis/*.exe
+          path: |
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/nsis/*.exe.sig
           if-no-files-found: error
 
   upload-installer:
@@ -67,4 +79,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.release-please.outputs.tag_name }}
-        run: gh release upload "$TAG" installer/*.exe --clobber --repo "$GITHUB_REPOSITORY"
+        run: |
+          shopt -s nullglob
+          installers=(installer/*.exe)
+          [ "${#installers[@]}" -eq 1 ] || { echo "expected one installer, found ${#installers[@]}"; exit 1; }
+          installer="${installers[0]}"
+          assets=("$installer")
+          if [ -f "$installer.sig" ]; then
+            name=$(basename "$installer")
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > notes.md
+            jq -n \
+              --arg version "${TAG#v}" \
+              --rawfile notes notes.md \
+              --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --rawfile signature "$installer.sig" \
+              --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$name" \
+              '{version: $version, notes: $notes, pub_date: $date, platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' \
+              > latest.json
+            assets+=("$installer.sig" latest.json)
+          fi
+          gh release upload "$TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"

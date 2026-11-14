@@ -106,7 +106,7 @@ jobs:
       - run: cargo test --workspace --locked
       - name: Build installer
         working-directory: crates/desktop
-        run: ../../web/node_modules/.bin/tauri build --bundles nsis
+        run: ../../web/node_modules/.bin/tauri build --bundles nsis --config tauri.unsigned.conf.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: discombobulator-installer
