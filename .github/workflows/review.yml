@@ -56,4 +56,5 @@ jobs:
           claude_args: >-
             --allowedTools "Read,Glob,Grep,Write,Bash(git diff:*),Bash(git log:*),Bash(gh pr comment:*),Bash(gh pr view:*)"
       - name: Verdict
-        run: grep -qx 'VERDICT: PASS' verdict.txt
+        run: |
+          grep -qx 'VERDICT: PASS' verdict.txt
