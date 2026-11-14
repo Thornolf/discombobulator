@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/Thornolf/discombobulator/compare/v0.1.0...v0.2.0) (2026-11-14)
+
+
+### Features
+
+* move between scenes with Ctrl+arrows and from the phone ([#62](https://github.com/Thornolf/discombobulator/issues/62)) ([aab835e](https://github.com/Thornolf/discombobulator/commit/aab835efa3c7f73569b3674d23608e32eef2afc7))
+
+
+### Bug Fixes
+
+* core follow-ups (unreadable folders, local time, render pool, decisions, duplicates, one JPEG decoder) ([#54](https://github.com/Thornolf/discombobulator/issues/54)) ([2efed36](https://github.com/Thornolf/discombobulator/commit/2efed365e92ef7cd4579a973272144c618eb2d6c))
+* server and web follow-ups (tailnet scope, live sync, phone, keys, audit) ([#55](https://github.com/Thornolf/discombobulator/issues/55)) ([9088dd6](https://github.com/Thornolf/discombobulator/commit/9088dd69ec2e31440bc2fd67f2d33c90bf5474ed))
+
 ## [0.1.0](https://github.com/Thornolf/discombobulator/compare/v0.1.0...v0.1.0) (2026-11-14)
 
 
