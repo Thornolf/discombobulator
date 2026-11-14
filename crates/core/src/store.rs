@@ -320,10 +320,12 @@ mod tests {
     #[test]
     fn unreadable_folders_are_not_pruned() -> Result<(), StoreError> {
         let store = Store::in_memory()?;
-        let locked = photo("/p/locked", "A");
-        let open = photo("/p/open", "B");
-        store.replace_photos(Path::new("/p"), &[locked.clone(), open.clone()], &[])?;
-        store.replace_photos(Path::new("/p"), &[], &[PathBuf::from("/p/locked")])?;
+        let root = PathBuf::from("/p");
+        let locked_dir = root.join("locked");
+        let locked = photo(&locked_dir.to_string_lossy(), "A");
+        let open = photo(&root.join("open").to_string_lossy(), "B");
+        store.replace_photos(&root, &[locked.clone(), open.clone()], &[])?;
+        store.replace_photos(&root, &[], &[locked_dir])?;
         assert!(store.photo(&locked.id)?.is_some());
         assert!(store.photo(&open.id)?.is_none());
         Ok(())
