@@ -47,7 +47,8 @@ export const api = {
   phone: () => request<PhoneStatus>("/api/phone"),
   enablePhone: () => request<PhoneStatus>("/api/phone", { method: "POST" }),
   recyclePlan: () => request<RecyclePlan>("/api/recycle"),
-  recycle: () => request<RecycleReport>("/api/recycle", { method: "POST" }),
+  recycle: (confirmed: RecyclePlan) =>
+    request<RecycleReport>("/api/recycle", { method: "POST", body: JSON.stringify(confirmed) }),
   applyPlan: () => request<ApplyPlan>("/api/apply"),
   apply: () => request<ApplyReport>("/api/apply", { method: "POST" }),
   decide: (changes: DecisionChange[]) =>

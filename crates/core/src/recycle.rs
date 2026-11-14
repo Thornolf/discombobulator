@@ -4,9 +4,10 @@ use serde::Serialize;
 use walkdir::WalkDir;
 
 use crate::apply::Failure;
+use crate::recycle_bin;
 use crate::scan::TRASH_DIR;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct RecyclePlan {
     pub files: usize,
     pub bytes: u64,
@@ -20,7 +21,8 @@ pub struct RecycleReport {
 }
 
 fn is_trash_dir(entry: &walkdir::DirEntry) -> bool {
-    entry.file_type().is_dir()
+    entry.depth() > 0
+        && entry.file_type().is_dir()
         && entry
             .file_name()
             .to_string_lossy()
@@ -67,15 +69,12 @@ pub fn plan(root: &Path) -> RecyclePlan {
     }
 }
 
-fn inside_trash(root: &Path, file: &Path) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(file).map_err(|error| error.to_string())?;
-    if !metadata.file_type().is_file() {
-        return Err("not a regular file".into());
-    }
+fn checked_path(root: &Path, file: &Path) -> Result<PathBuf, String> {
+    let name = file.file_name().ok_or("has no name")?;
     let parent = file
         .parent()
         .and_then(|parent| dunce::canonicalize(parent).ok())
-        .ok_or("cannot resolve its folder")?;
+        .ok_or("its folder cannot be resolved")?;
     let in_trash = parent
         .strip_prefix(root)
         .map(|relative| {
@@ -89,12 +88,18 @@ fn inside_trash(root: &Path, file: &Path) -> Result<(), String> {
             "not inside a {TRASH_DIR} folder of the open folder"
         ));
     }
-    Ok(())
+    let resolved = parent.join(name);
+    let metadata =
+        std::fs::symlink_metadata(&resolved).map_err(|error| error.kind().to_string())?;
+    if !metadata.file_type().is_file() {
+        return Err("not a regular file".into());
+    }
+    Ok(resolved)
 }
 
 pub fn recycle_with<F>(root: &Path, mut send: F) -> RecycleReport
 where
-    F: FnMut(&Path) -> Result<(), String>,
+    F: FnMut(&Path, u64) -> Result<(), String>,
 {
     let mut report = RecycleReport::default();
     for (file, size) in pending_files(root) {
@@ -102,7 +107,7 @@ where
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        match inside_trash(root, &file).and_then(|()| send(&file)) {
+        match checked_path(root, &file).and_then(|resolved| send(&resolved, size)) {
             Ok(()) => {
                 report.recycled += 1;
                 report.bytes += size;
@@ -114,8 +119,14 @@ where
 }
 
 pub fn recycle(root: &Path) -> RecycleReport {
-    recycle_with(root, |file| {
-        trash::delete(file).map_err(|error| error.to_string())
+    let limit = recycle_bin::max_file_bytes(root);
+    recycle_with(root, |file, size| {
+        let limit = limit.clone()?;
+        if size > limit {
+            return Err("larger than the Recycle Bin allows, so it was kept".into());
+        }
+        trash::delete(file)
+            .map_err(|_| "could not be sent to the Recycle Bin, so it was kept".into())
     })
 }
 
@@ -149,7 +160,7 @@ mod tests {
         write(&root.join("_to_delete/B.JPG"), b"12345")?;
         write(&root.join("_to_delete/C.RAF"), b"123")?;
         let mut sent = Vec::new();
-        let report = recycle_with(&root, |file| {
+        let report = recycle_with(&root, |file, _| {
             if file.ends_with("C.RAF") {
                 return Err("locked".into());
             }
@@ -159,6 +170,16 @@ mod tests {
         assert_eq!((report.recycled, report.bytes), (1, 5));
         assert_eq!(report.failures.len(), 1);
         assert_eq!(sent, vec![root.join("_to_delete").join("B.JPG")]);
+        Ok(())
+    }
+
+    #[test]
+    fn an_open_folder_named_like_the_trash_is_not_the_trash() -> std::io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dunce::canonicalize(dir.path())?.join("_to_delete");
+        write(&root.join("A.JPG"), b"keep")?;
+        let root = dunce::canonicalize(&root)?;
+        assert_eq!(plan(&root), RecyclePlan::default());
         Ok(())
     }
 
@@ -175,7 +196,7 @@ mod tests {
             outside.path().join("precious.JPG"),
             root.join("_to_delete").join("file.JPG"),
         )?;
-        let report = recycle_with(&root, |_| Err("should not be called".into()));
+        let report = recycle_with(&root, |_, _| Err("should not be called".into()));
         assert_eq!(report.recycled, 0);
         assert!(report.failures.is_empty());
         assert!(outside.path().join("precious.JPG").exists());

@@ -419,6 +419,7 @@ pub async fn recycle_plan(
 
 pub async fn recycle(
     State(state): State<Arc<AppState>>,
+    Json(confirmed): Json<discombobulator_core::recycle::RecyclePlan>,
 ) -> ApiResult<Json<discombobulator_core::recycle::RecycleReport>> {
     let session = session(&state)?;
     tokio::task::spawn_blocking(move || {
@@ -426,9 +427,14 @@ pub async fn recycle(
             .apply_lock
             .lock()
             .map_err(|_| ApiError::internal("apply lock poisoned"))?;
-        Ok(discombobulator_core::recycle::recycle(
-            session.library.root(),
-        ))
+        let root = session.library.root();
+        if discombobulator_core::recycle::plan(root) != confirmed {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "The _to_delete folders changed. Check the new count and confirm again.",
+            ));
+        }
+        Ok(discombobulator_core::recycle::recycle(root))
     })
     .await
     .map_err(ApiError::internal)?

@@ -21,14 +21,17 @@
   }
 
   async function send() {
+    if (!plan) return;
     busy = true;
     error = null;
     try {
-      report = await api.recycle();
+      report = await api.recycle(plan);
       confirming = false;
       await load();
     } catch (failure) {
       error = failure instanceof Error ? failure.message : String(failure);
+      confirming = false;
+      await load();
     } finally {
       busy = false;
     }
@@ -40,56 +43,55 @@
   });
 </script>
 
-<section>
-  {#if report}
-    <p>
-      Sent <b>{report.recycled}</b> file{report.recycled === 1 ? "" : "s"} ({megabytes(report.bytes)}) to the
-      Recycle Bin. Restore them from there if needed.
-    </p>
-    {#if report.failures.length}
-      <ul class="failures">
-        {#each report.failures as failure, index (index)}
-          <li><b>{failure.name}</b>: {failure.error}</li>
-        {/each}
-      </ul>
-    {/if}
-  {/if}
-  {#if plan && plan.files > 0}
-    {#if confirming}
+{#if report || (plan && plan.files > 0) || error}
+  <section>
+    {#if report}
       <p>
-        Send <b>{plan.files}</b> file{plan.files === 1 ? "" : "s"} ({megabytes(plan.bytes)}) from
-        <code>_to_delete</code> to the Recycle Bin?
+        Sent <b>{report.recycled}</b> file{report.recycled === 1 ? "" : "s"} ({megabytes(report.bytes)}) to
+        the Recycle Bin. Restore them from there if needed.
       </p>
-      <div class="row">
-        <button onclick={() => (confirming = false)} disabled={busy}>Cancel</button>
-        <button class="danger" onclick={send} disabled={busy}
-          >{busy ? "Sending…" : "Send to Recycle Bin"}</button
-        >
-      </div>
-    {:else}
-      <div class="row">
-        <span class="note"
-          ><code>_to_delete</code> holds {plan.files} file{plan.files === 1 ? "" : "s"} ({megabytes(
-            plan.bytes,
-          )}).</span
-        >
-        <button onclick={() => (confirming = true)}>Empty into Recycle Bin…</button>
-      </div>
+      {#if report.failures.length}
+        <ul class="failures">
+          {#each report.failures as failure, index (index)}
+            <li><b>{failure.name}</b>: {failure.error}</li>
+          {/each}
+        </ul>
+      {/if}
     {/if}
-  {/if}
-  {#if error}
-    <p class="error">{error}</p>
-  {/if}
-</section>
+    {#if plan && plan.files > 0}
+      {#if confirming}
+        <p>
+          Send <b>{plan.files}</b> file{plan.files === 1 ? "" : "s"} ({megabytes(plan.bytes)}) from
+          <code>_to_delete</code> to the Recycle Bin?
+        </p>
+        <div class="row">
+          <button onclick={() => (confirming = false)} disabled={busy}>Cancel</button>
+          <button class="danger" onclick={send} disabled={busy}
+            >{busy ? "Sending…" : "Send to Recycle Bin"}</button
+          >
+        </div>
+      {:else}
+        <div class="row">
+          <span class="note"
+            ><code>_to_delete</code> holds {plan.files} file{plan.files === 1 ? "" : "s"} ({megabytes(
+              plan.bytes,
+            )}).</span
+          >
+          <button onclick={() => (confirming = true)}>Empty into Recycle Bin…</button>
+        </div>
+      {/if}
+    {/if}
+    {#if error}
+      <p class="error">{error}</p>
+    {/if}
+  </section>
+{/if}
 
 <style>
   section {
     border-top: 1px solid var(--line);
     margin-top: 14px;
     padding-top: 10px;
-  }
-  section:empty {
-    display: none;
   }
   .row {
     display: flex;
