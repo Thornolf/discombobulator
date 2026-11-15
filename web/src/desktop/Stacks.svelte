@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { SvelteSet } from "svelte/reactivity";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import ApplyDialog from "../components/ApplyDialog.svelte";
   import FolderPicker from "../components/FolderPicker.svelte";
   import PhoneDialog from "../components/PhoneDialog.svelte";
@@ -11,7 +11,11 @@
   import type { LibraryStore } from "../lib/library.svelte";
   import { warmUp } from "../lib/preload";
   import type { Photo } from "../lib/types";
+  import type { Analysis } from "../lib/analysis";
+  import { shotInfo } from "../lib/shotinfo.svelte";
+  import { ViewState, type ViewOptions } from "../lib/view.svelte";
   import Duplicates from "./Duplicates.svelte";
+  import InfoPanel from "./InfoPanel.svelte";
   import Frame from "./Frame.svelte";
   import SceneList from "./SceneList.svelte";
   import Strip from "./Strip.svelte";
@@ -31,6 +35,21 @@
   let toast = $state<string | null>(null);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   let anchorId: string | null = null;
+  const view = new ViewState();
+  const analyses = new SvelteMap<string, Analysis>();
+  const ANALYSES_KEPT = 8;
+
+  function rememberAnalysis(photo: Photo, analysis: Analysis) {
+    const key = analysisKey(photo);
+    analyses.delete(key);
+    analyses.set(key, analysis);
+    while (analyses.size > ANALYSES_KEPT) {
+      const oldest = analyses.keys().next().value;
+      if (oldest === undefined) break;
+      analyses.delete(oldest);
+    }
+  }
+  const analysisKey = (photo: Photo) => `${photo.id}:${photo.version}`;
 
   const scenes: Scene[] = $derived(groupScenes(store.photos));
   const scene: Scene | undefined = $derived(scenes[sceneIndex]);
@@ -197,6 +216,24 @@
     notify("Undone");
   }
 
+  const viewToggles = {
+    info: ["info", "Shot info"],
+    focusPoint: ["focusPoint", "Focus point"],
+    histogram: ["histogram", "Histogram"],
+    histogramMode: ["colorHistogram", "Color histogram"],
+    clipping: ["clipping", "Clipping"],
+  } as const satisfies Partial<Record<Action, readonly [keyof ViewOptions, string]>>;
+
+  function toggleView(action: keyof typeof viewToggles) {
+    const [option, label] = viewToggles[action];
+    view.toggle(option);
+    if (action === "histogramMode") {
+      notify(view.options.colorHistogram ? "Histogram: colors" : "Histogram: brightness");
+      return;
+    }
+    notify(`${label} ${view.options[option] ? "on" : "off"}`);
+  }
+
   const handlers: Record<Action, () => void> = {
     approve: () => mark("approved"),
     delete: () => mark("delete"),
@@ -227,6 +264,11 @@
     duplicates: () => (dialog = "duplicates"),
     open: openFolder,
     help: () => (dialog = "help"),
+    info: () => toggleView("info"),
+    focusPoint: () => toggleView("focusPoint"),
+    histogram: () => toggleView("histogram"),
+    histogramMode: () => toggleView("histogramMode"),
+    clipping: () => toggleView("clipping"),
   };
 
   function onkeydown(event: KeyboardEvent) {
@@ -339,6 +381,11 @@
               selected={selected.has(photo.id)}
               solo={solo && index === frameIndex}
               hidden={solo && index !== frameIndex}
+              info={shotInfo.get(photo)}
+              showFocus={view.options.focusPoint}
+              showClipping={view.options.clipping}
+              wantAnalysis={view.options.info && view.options.histogram && photo.id === focused?.id}
+              onanalysis={(analysis) => rememberAnalysis(photo, analysis)}
               onfocus={(event) => frameClick(index, event)}
               onrate={(rating) => rate(photo, rating)}
               onsolo={() => {
@@ -364,6 +411,17 @@
       {/if}
       <Strip stacks={scene?.stacks ?? []} current={stackIndex} onpick={(index) => goTo(sceneIndex, index)} />
     </section>
+    {#if view.options.info && focused}
+      <InfoPanel
+        photo={focused}
+        info={shotInfo.get(focused)}
+        analysis={analyses.get(analysisKey(focused)) ?? null}
+        view={view.options}
+        {keymap}
+        position={stack.length > 1 ? `${frameIndex + 1} of ${stack.length}` : null}
+        ontoggle={(action) => handlers[action]()}
+      />
+    {/if}
   </main>
 </div>
 

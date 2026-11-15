@@ -9,7 +9,11 @@ import {
   restoreKeymap,
 } from "./keymap";
 
-const key = (key: string, code: string, extra: Partial<{ ctrlKey: boolean; altKey: boolean }> = {}) => ({
+const key = (
+  key: string,
+  code: string,
+  extra: Partial<{ ctrlKey: boolean; altKey: boolean; shiftKey: boolean }> = {},
+) => ({
   key,
   code,
   ctrlKey: false,
@@ -41,6 +45,37 @@ describe("keymap", () => {
       defaultKeymap.sceneNext,
     );
     expect(restoreKeymap({ sceneNext: [{ key: "j" }] }).sceneNext).toEqual([{ key: "j" }]);
+  });
+
+  it("gives every default key to exactly one action", () => {
+    for (const [action, bindings] of Object.entries(defaultKeymap)) {
+      for (const binding of bindings) {
+        const event = binding.code
+          ? key("", binding.code, { ctrlKey: Boolean(binding.ctrl), shiftKey: Boolean(binding.shift) })
+          : key(binding.shift ? (binding.key ?? "").toUpperCase() : (binding.key ?? ""), "", {
+              ctrlKey: Boolean(binding.ctrl),
+              shiftKey: Boolean(binding.shift),
+            });
+        expect(actionFor(defaultKeymap, event), describeBinding(binding)).toBe(action);
+      }
+    }
+  });
+
+  it("tells Shift+G from G", () => {
+    expect(actionFor(defaultKeymap, key("g", "KeyG"))).toBe("histogram");
+    expect(actionFor(defaultKeymap, key("G", "KeyG", { shiftKey: true }))).toBe("histogramMode");
+    expect(actionFor(defaultKeymap, key("A", "KeyQ", { shiftKey: true }))).toBe("approve");
+    expect(describeBinding({ key: "g", shift: true })).toBe("Shift+G");
+    expect(bindingFor(key("G", "KeyG", { shiftKey: true }))).toEqual({ key: "g", ctrl: false, shift: true });
+    expect(bindingFor(key("?", "Comma", { shiftKey: true }))).toEqual({ key: "?", ctrl: false });
+  });
+
+  it("keeps a custom key over a new default that uses the same key", () => {
+    const restored = restoreKeymap({ approve: [{ key: "p" }] });
+    expect(restored.approve).toEqual([{ key: "p" }]);
+    expect(restored.focusPoint).toEqual([]);
+    expect(actionFor(restored, key("p", "KeyP"))).toBe("approve");
+    expect(restoreKeymap(null).focusPoint).toEqual([{ key: "p" }]);
   });
 
   it("moves between scenes with Ctrl and the vertical arrows", () => {

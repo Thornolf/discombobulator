@@ -99,6 +99,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/photos", get(api::photos))
         .route("/api/photos/{id}/thumb", get(api::thumb))
         .route("/api/photos/{id}/preview", get(api::preview))
+        .route("/api/photos/{id}/info", get(api::shot_info))
         .route(
             "/api/decisions",
             get(api::decisions_since).post(api::decisions),

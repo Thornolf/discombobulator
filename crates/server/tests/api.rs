@@ -99,6 +99,35 @@ async fn opens_folder_lists_photos_and_serves_thumbs() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn serves_shot_info_for_known_photos_only() -> TestResult {
+    let fixture = fixture()?;
+    let photos = open_and_wait(&fixture).await?;
+    let id = photos[0]["id"].as_str().unwrap_or_default().to_owned();
+    let (status, info) = send(
+        &fixture.state,
+        request("GET", &format!("/api/photos/{id}/info"), None)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(info["faces"], json!([]));
+    assert_eq!(info["focus_point"], Value::Null);
+    let unknown = "0".repeat(id.len());
+    let (status, _) = send(
+        &fixture.state,
+        request("GET", &format!("/api/photos/{unknown}/info"), None)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(
+        &fixture.state,
+        request("GET", "/api/photos/..%2Fsecret/info", None)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn decisions_are_saved_and_unknown_ids_reported() -> TestResult {
     let fixture = fixture()?;
     let photos = open_and_wait(&fixture).await?;

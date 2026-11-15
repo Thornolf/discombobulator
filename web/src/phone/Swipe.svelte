@@ -8,6 +8,10 @@
   import { cachedCount, clearOffline, downloadForOffline } from "../lib/offline";
   import { warmUp } from "../lib/preload";
   import type { Decision, Photo } from "../lib/types";
+  import { analyzeImage, type Analysis } from "../lib/analysis";
+  import { exposureLine, shotInfo } from "../lib/shotinfo.svelte";
+  import { ViewState } from "../lib/view.svelte";
+  import InfoSheet from "./InfoSheet.svelte";
   import Piles from "./Piles.svelte";
   import Scenes from "./Scenes.svelte";
   import { untrack } from "svelte";
@@ -57,6 +61,44 @@
     new Map(scenes.flatMap((scene, index) => scene.photos.map((photo) => [photo.id, index] as const))),
   );
   const current: Photo | undefined = $derived(store.photo(deck[position] ?? ""));
+  const view = new ViewState();
+  let fullImage = $state<HTMLImageElement>();
+  let analysis = $state<Analysis | null>(null);
+  let deckWidth = $state(0);
+  let deckHeight = $state(0);
+  const info = $derived(current ? shotInfo.get(current) : undefined);
+  const details = $derived(
+    info ? [exposureLine(info), info.film_simulation].filter(Boolean).join(" · ") : "",
+  );
+  const imageBox = $derived.by(() => {
+    if (!current?.width || !current.height || !deckWidth || !deckHeight) return null;
+    const scale = Math.min(deckWidth / current.width, deckHeight / current.height);
+    const width = current.width * scale;
+    const height = current.height * scale;
+    return { left: (deckWidth - width) / 2, top: (deckHeight - height) / 2, width, height };
+  });
+
+  function analyzeCurrent() {
+    if (!view.options.phoneInfo || !current || !fullImage?.complete) return;
+    analysis = analyzeImage(`${current.id}:${current.version}`, fullImage);
+  }
+
+  $effect(() => {
+    void current?.id;
+    void view.options.phoneInfo;
+    untrack(() => {
+      analysis = null;
+      analyzeCurrent();
+    });
+  });
+
+  function toggleInfo() {
+    view.toggle("phoneInfo");
+  }
+
+  function rateCurrent(rating: number) {
+    if (current) store.decide([{ id: current.id, decision: { ...current.decision, rating } }]);
+  }
   const next: Photo | undefined = $derived(store.photo(deck[position + 1] ?? ""));
   const previous: Photo | undefined = $derived(store.photo(deck[position - 1] ?? ""));
   const sceneIndex = $derived(current ? (sceneOf.get(current.id) ?? -1) : -1);
@@ -277,6 +319,8 @@
       setZoom(!zoom);
     } else if (key === "p") {
       sheet = "piles";
+    } else if (key === "i") {
+      toggleInfo();
     }
   }
 
@@ -349,7 +393,7 @@
     ></i>
   </div>
 
-  <div class="deck">
+  <div class="deck" bind:clientWidth={deckWidth} bind:clientHeight={deckHeight}>
     {#if current}
       {#if next}
         {#key next.id}
@@ -377,12 +421,30 @@
         >
           <img class="thumb" src={thumbUrl(current)} alt="" />
           <img
+            bind:this={fullImage}
+            onload={analyzeCurrent}
             class="full"
             src={previewUrl(current)}
             alt=""
             style:transform-origin={origin}
             style:transform={zoom ? `translate(${panX}px, ${panY}px) scale(2.6)` : undefined}
           />
+          {#if info?.focus_point && imageBox && !zoom}
+            <span
+              class="focus"
+              class:warn={info.focus_warning === true}
+              style:left={`${imageBox.left + info.focus_point.x * imageBox.width}px`}
+              style:top={`${imageBox.top + info.focus_point.y * imageBox.height}px`}
+            ></span>
+          {/if}
+          <button
+            class="info-toggle"
+            class:on={view.options.phoneInfo}
+            aria-pressed={view.options.phoneInfo}
+            aria-label="Shot info"
+            onpointerdown={(event) => event.stopPropagation()}
+            onclick={toggleInfo}>i</button
+          >
           <span class="stamp s-left" class:show={stamp === "left"}>DELETE</span>
           <span class="stamp s-right" class:show={stamp === "right"}>LR ✓</span>
           <span class="stamp s-up" class:show={stamp === "up"}>♥ FAVORITE</span>
@@ -392,6 +454,7 @@
             {#if current.raf}<span class="chip">RAF</span>{/if}
             {#if similar}<span class="chip similar">Looks like the previous one</span>{/if}
             {#if mode === "unsure"}<span class="chip">Second look</span>{/if}
+            {#if details}<span class="chip details">{details}</span>{/if}
           </div>
         </div>
       {/key}
@@ -424,6 +487,9 @@
           {/if}
         {/if}
       </div>
+    {/if}
+    {#if current && view.options.phoneInfo}
+      <InfoSheet photo={current} {info} {analysis} onrate={rateCurrent} onclose={toggleInfo} />
     {/if}
   </div>
 
@@ -665,6 +731,43 @@
     padding: 3px 9px;
     border-radius: 999px;
     background: #ffffff1f;
+  }
+  .chip.details {
+    font: 500 11px var(--f-mono);
+    background: #0009;
+  }
+  .info-toggle {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 2;
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    border: 1px solid #ffffff55;
+    background: #0009;
+    color: #f2f2f3;
+    font:
+      700 16px Georgia,
+      serif;
+    pointer-events: auto;
+  }
+  .info-toggle.on {
+    background: #f2f2f3;
+    color: #000;
+  }
+  .focus {
+    position: absolute;
+    width: 40px;
+    height: 40px;
+    margin: -20px 0 0 -20px;
+    border: 2px solid #2fbf71;
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px #0009;
+    pointer-events: none;
+  }
+  .focus.warn {
+    border-color: #f08a24;
   }
   .chip.similar {
     background: #ffb62733;

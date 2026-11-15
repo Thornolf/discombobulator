@@ -19,6 +19,9 @@ Tailscale. `SPEC.md` is the source of truth for behavior. Read it before changin
     dependency risk.
 - CI runs both reviews plus `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo deny`,
   `cargo audit`, and frontend lint, typecheck and tests. Branch protection on `main` requires all of them.
+- Keyboard first: every desktop option or toggle has a remappable shortcut, shown next to its control
+  and listed in the `?` help. No two actions share a default key (enforced by a test in
+  `web/src/lib/keymap.test.ts`).
 - More rules may be added by the owner later.
 
 ## Follow-ups and findings go in their own issues
