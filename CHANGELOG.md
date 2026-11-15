@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/Thornolf/discombobulator/compare/v0.4.0...v0.5.0) (2026-11-15)
+
+
+### Features
+
+* shot info panel, focus point, histogram and clipping, keyboard first ([#73](https://github.com/Thornolf/discombobulator/issues/73)) ([fc79104](https://github.com/Thornolf/discombobulator/commit/fc79104269ae8a1a9c7eda5035f27809dec0e986))
+
 ## [0.4.0](https://github.com/Thornolf/discombobulator/compare/v0.3.1...v0.4.0) (2026-11-14)
 
 
